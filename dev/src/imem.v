@@ -6,12 +6,13 @@ module imem #(
     parameter INIT_FILE   = "program.hex"
 )(
     input  wire        clk,
-    input  wire [31:0] addr,    // byte address (PC); addr[1:0] assumed 0
+    input  wire [31:0] addr,    // byte address (PC), addr[1:0] assumed 0
     output wire [31:0] instr
 );
     localparam AW = $clog2(DEPTH_WORDS);
 
-    reg [31:0] mem [0:DEPTH_WORDS-1];
+    // Pragma to help quartus infer not to use LU's 
+    (* ramstyle = "M4K" *) reg [31:0] mem [0:DEPTH_WORDS-1];
     reg [31:0] addr_reg; 
 
     integer i;

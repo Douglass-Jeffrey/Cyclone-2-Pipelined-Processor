@@ -1,0 +1,5 @@
+stall_dist1.S
+stall_dist2.S
+stall_store.S
+stall_alu.S
+stall_lui.S

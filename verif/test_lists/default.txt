@@ -1,0 +1,15 @@
+# Default list for run_directed_tests.py
+
+# load-use interlock, stalls exactly when needed, never otherwise
+stall_dist1.S
+stall_dist2.S
+stall_store.S
+stall_alu.S
+stall_lui.S
+
+# forwarding, hazards, control flow and memory
+t1_alu_forwarding.S
+t2_load_use.S
+t3_control_flow.S
+t4_memory_ops.S
+t5_store_hazards.S

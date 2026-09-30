@@ -1,37 +1,32 @@
 `include "defines.vh"
 
 //multi-cycle pipelined RV32I datapath
-//
-// No branch prediction yet: every branch is implicitly predicted not-taken.
-// Branches and jumps resolve in EX; when one redirects, the wrong-path
-// instruction sitting in ID is squashed and fetch is pointed at the target.
-//
-// Hazards:
-//   * RAW between ALU-type producers and consumers -> forwarding (EX stage)
-//   * RAW from a load to the very next instruction -> 1-cycle stall (hazard_unit)
-//   * producer in WB, consumer in ID               -> regfile write-through
-//
-// Every pipeline register carries a `valid` bit.  A bubble is just valid=0;
-// the other fields keep stale data, so every place that has a side effect
-// (regfile write, dmem write, redirect, forwarding) qualifies with valid.
+// no BP yet, all are implicitely not taken 
 module pipelined_datapath #(
     parameter RESET_PC  = 32'h0000_0000,
     parameter IMEM_INIT = "program.hex"
 ) (
     input  wire        clk,
     input  wire        rst,
-    // observation ports for a testbench
+    // output for instructions retiring this cycle fed to TB, quartus board wrapper
     output wire [31:0] dbg_pc,
     output wire [31:0] dbg_instr,
     output wire [31:0] dbg_wb_data,
-    output wire        dbg_reg_write
+    output wire        dbg_reg_write, 
+    // more quartus board wrapper outputs
+    output wire [31:0] dbg_if_pc,           // pc of the instruction in ID
+    output wire        dbg_retire_valid,    // a real instruction retired this cycle
+    output wire        dbg_stall,           // load-use interlock held the front end
+    output wire        dbg_redirect         // branch/jump flushed the front end
 );
     //PIPELINE IF STAGE================================================================================
     // branch prediction will take place in this stage, actual branch will resolve in the EX stage
     //for branches, jal, jalr, auipc
     wire redirect;
     wire [31:0] redirect_pc;
-    wire stall;     // hold pc and if/id stable when a dmem accessing RAW dependency occurs
+
+    // hold pc and if/id stable when a dmem accessing RAW dependency occurs
+    wire stall;    
 
     //ifid regs
     wire [31:0] if_id_instr;    // written by instr mem
@@ -74,7 +69,6 @@ module pipelined_datapath #(
     end
 
     // PIPELINE ID STAGE================================================================================
-
     // Main control
     wire [4:0] rs1_addr, rs2_addr, id_rd_addr;
     wire [3:0] alu_op;
@@ -83,7 +77,7 @@ module pipelined_datapath #(
     wire       id_reg_write, alu_a_src, alu_b_src, mem_read, mem_write, branch, jal, jalr;
     wire       uses_rs1, uses_rs2;
 
-    // do all of the relevant decode and control logic
+    // Do all of the relevant decode and control logic
     ctl u_ctl (
         .instr     (if_id_instr),
         .rs1_addr  (rs1_addr),
@@ -133,14 +127,26 @@ module pipelined_datapath #(
     );
 
     // id_ex_regs
-    reg [31:0] id_ex_pc, id_ex_instr, id_ex_imm;
-    reg [31:0] id_ex_rs1_data, id_ex_rs2_data;
-    reg [4:0]  id_ex_rs1_addr, id_ex_rs2_addr, id_ex_rd_addr;
+    reg [31:0] id_ex_pc;
+    reg [31:0] id_ex_instr;
+    reg [31:0] id_ex_imm;
+    reg [31:0] id_ex_rs1_data;
+    reg [31:0] id_ex_rs2_data;
+    reg [4:0]  id_ex_rs1_addr;
+    reg [4:0]  id_ex_rs2_addr;
+    reg [4:0]  id_ex_rd_addr;
     reg [3:0]  id_ex_alu_op;
-    reg [2:0]  id_ex_imm_type;
+    //reg [2:0]  id_ex_imm_type;
     reg [2:0]  id_ex_funct3;
     reg [1:0]  id_ex_wb_src;
-    reg        id_ex_reg_write, id_ex_alu_a_src, id_ex_alu_b_src, id_ex_mem_read, id_ex_mem_write, id_ex_branch, id_ex_jal, id_ex_jalr;
+    reg        id_ex_reg_write;
+    reg        id_ex_alu_a_src;
+    reg        id_ex_alu_b_src;
+    reg        id_ex_mem_read;
+    reg        id_ex_mem_write;
+    reg        id_ex_branch;
+    reg        id_ex_jal;
+    reg        id_ex_jalr;
     reg        id_ex_valid;
 
     wire ex_bubble;
@@ -159,12 +165,13 @@ module pipelined_datapath #(
         .ex_bubble      (ex_bubble)
     );
 
-    //id_ex allocations:
+    // id_ex allocations:
     always @(posedge clk) begin
         if (rst) begin
             id_ex_valid <= 1'b0;
         end
-        else if (ex_bubble) begin // occurs on load->consume stall, or redirect (to invalidate current cmd)
+        // occurs on load->use stall, or redirect
+        else if (ex_bubble) begin
             id_ex_valid <= 1'b0;
         end
         else begin
@@ -197,29 +204,57 @@ module pipelined_datapath #(
 
     // PIPELINE EX STAGE================================================================================
 
-    //ex_mem_regs
-    reg [31:0] ex_mem_pc, ex_mem_instr, ex_mem_imm, ex_mem_alu_result;
-    reg [31:0] ex_mem_rs1_data, ex_mem_rs2_data, ex_mem_wb_data;
-    reg [4:0]  ex_mem_rs1_addr, ex_mem_rs2_addr, ex_mem_rd_addr;
-    reg [3:0]  ex_mem_alu_op;
-    reg [2:0]  ex_mem_imm_type;
+    // ex_mem_regs
+    reg [31:0] ex_mem_pc;
+    reg [31:0] ex_mem_instr;
+    //reg [31:0] ex_mem_imm;
+    reg [31:0] ex_mem_alu_result;
+    // reg [31:0] ex_mem_rs1_data;
+    reg [31:0] ex_mem_rs2_data;
+    reg [31:0] ex_mem_wb_data;
+    // reg [4:0]  ex_mem_rs1_addr;
+    reg [4:0]  ex_mem_rs2_addr;
+    reg [4:0]  ex_mem_rd_addr;
+    // reg [3:0]  ex_mem_alu_op;
+    //reg [2:0]  ex_mem_imm_type;
     reg [2:0]  ex_mem_funct3;
     reg [1:0]  ex_mem_wb_src;
-    reg        ex_mem_reg_write, ex_mem_alu_a_src, ex_mem_alu_b_src, ex_mem_mem_read, ex_mem_mem_write, ex_mem_branch, ex_mem_jal, ex_mem_jalr;
+    reg        ex_mem_reg_write;
+    //reg        ex_mem_alu_a_src;
+    //reg        ex_mem_alu_b_src;
+    reg        ex_mem_mem_read;
+    reg        ex_mem_mem_write;
+    //reg        ex_mem_branch;
+    //reg        ex_mem_jal;
+    //reg        ex_mem_jalr;
     reg        ex_mem_valid;
 
-    //mem_wb_regs
-    reg [31:0] mem_wb_pc, mem_wb_instr, mem_wb_imm, mem_wb_alu_result;
-    reg [31:0] mem_wb_rs1_data, mem_wb_rs2_data, mem_wb_wb_data;
-    reg [4:0]  mem_wb_rs1_addr, mem_wb_rs2_addr, mem_wb_rd_addr;
-    reg [3:0]  mem_wb_alu_op;
-    reg [2:0]  mem_wb_imm_type;
+    // mem_wb_regs
+    reg [31:0] mem_wb_pc;
+    reg [31:0] mem_wb_instr;
+    //reg [31:0] mem_wb_imm;
+    //reg [31:0] mem_wb_alu_result;
+    //reg [31:0] mem_wb_rs1_data;
+    //reg [31:0] mem_wb_rs2_data;
+    reg [31:0] mem_wb_wb_data;
+    //reg [4:0]  mem_wb_rs1_addr;
+    //reg [4:0]  mem_wb_rs2_addr;
+    reg [4:0]  mem_wb_rd_addr;
+    //reg [3:0]  mem_wb_alu_op;
+    //reg [2:0]  mem_wb_imm_type;
     reg [2:0]  mem_wb_funct3;
     reg [1:0]  mem_wb_wb_src;
-    reg        mem_wb_reg_write, mem_wb_alu_a_src, mem_wb_alu_b_src, mem_wb_mem_read, mem_wb_mem_write, mem_wb_branch, mem_wb_jal, mem_wb_jalr;
+    reg        mem_wb_reg_write;
+    //reg        mem_wb_alu_a_src;
+    //reg        mem_wb_alu_b_src;
+    reg        mem_wb_mem_read;
+    //reg        mem_wb_mem_write;
+    //reg        mem_wb_branch;
+    //reg        mem_wb_jal;
+    //reg        mem_wb_jalr;
     reg        mem_wb_valid;
 
-    //forwarding logic
+    // forwarding logic
     wire [1:0] fwd_a, fwd_b;
     forwarding_unit u_fwd (
         .ex_rs1_addr   (id_ex_rs1_addr),
@@ -253,7 +288,7 @@ module pipelined_datapath #(
         .zero_flag (zero_flag)
     );
 
-    // what this instruction writes back if it is not a load
+    // Decide WB contents 
     reg [31:0] ex_wb_data;
     always @(*) begin
         case (id_ex_wb_src)
@@ -280,7 +315,7 @@ module pipelined_datapath #(
     wire take_branch = id_ex_branch & cond;
     wire jump = id_ex_jal || id_ex_jalr;
 
-    // Next-PC mux
+    // next-PC mux
     wire [31:0] pc_target   = id_ex_pc + id_ex_imm;      // branch immB / JAL immJ
     wire [31:0] jalr_target = {alu_result[31:1], 1'b0};  // rs1 + immI, bit 0 cleared (jalr)
 
@@ -296,19 +331,19 @@ module pipelined_datapath #(
             ex_mem_valid        <= id_ex_valid;
             ex_mem_pc           <= id_ex_pc;
             ex_mem_instr        <= id_ex_instr;
-            ex_mem_imm          <= id_ex_imm;
+            //ex_mem_imm          <= id_ex_imm;
             ex_mem_alu_result   <= alu_result;
             ex_mem_wb_data      <= ex_wb_data;
 
-            ex_mem_rs1_data     <= id_ex_rs1_data; //prob dont need
+            //ex_mem_rs1_data     <= id_ex_rs1_data; //prob dont need
             ex_mem_rs2_data     <= ex_rs2_val;     // store data: must be the forwarded value
-            ex_mem_rs1_addr     <= id_ex_rs1_addr; //prob dont need
-            ex_mem_rs2_addr     <= id_ex_rs2_addr; //prob dont need
+            //ex_mem_rs1_addr     <= id_ex_rs1_addr; //prob dont need
+            ex_mem_rs2_addr     <= id_ex_rs2_addr; 
             ex_mem_rd_addr      <= id_ex_rd_addr;
 
-            ex_mem_alu_op       <= id_ex_alu_op;   //prob dont need
-            ex_mem_alu_a_src    <= id_ex_alu_a_src;//prob dont need
-            ex_mem_alu_b_src    <= id_ex_alu_b_src;//prob dont need
+            //ex_mem_alu_op       <= id_ex_alu_op;   //prob dont need
+            //ex_mem_alu_a_src    <= id_ex_alu_a_src;//prob dont need
+            //ex_mem_alu_b_src    <= id_ex_alu_b_src;//prob dont need
 
             ex_mem_wb_src       <= id_ex_wb_src;
             ex_mem_reg_write    <= id_ex_reg_write;
@@ -316,9 +351,9 @@ module pipelined_datapath #(
             ex_mem_mem_read     <= id_ex_mem_read;
             ex_mem_mem_write    <= id_ex_mem_write;
 
-            ex_mem_branch       <= id_ex_branch;  //prob dont need
-            ex_mem_jal          <= id_ex_jal;     //prob dont need
-            ex_mem_jalr         <= id_ex_jalr;    //prob dont need
+            //ex_mem_branch       <= id_ex_branch;  //prob dont need
+            //ex_mem_jal          <= id_ex_jal;     //prob dont need
+            //ex_mem_jalr         <= id_ex_jalr;    //prob dont need
         end
     end
 
@@ -359,40 +394,39 @@ module pipelined_datapath #(
             mem_wb_valid        <= ex_mem_valid;
             mem_wb_pc           <= ex_mem_pc;
             mem_wb_instr        <= ex_mem_instr;
-            mem_wb_imm          <= ex_mem_imm;
-            mem_wb_alu_result   <= ex_mem_alu_result;
+            //mem_wb_imm          <= ex_mem_imm;
+            //mem_wb_alu_result   <= ex_mem_alu_result;
             mem_wb_wb_data      <= ex_mem_wb_data;
 
-            mem_wb_rs1_data     <= ex_mem_rs1_data; //prob dont need
-            mem_wb_rs2_data     <= ex_mem_rs2_data; //prob_dont need
-            mem_wb_rs1_addr     <= ex_mem_rs1_addr; //prob dont need
-            mem_wb_rs2_addr     <= ex_mem_rs2_addr; //prob dont need
+            //mem_wb_rs1_data     <= ex_mem_rs1_data; //prob dont need
+            //mem_wb_rs2_data     <= ex_mem_rs2_data; //prob_dont need
+            //mem_wb_rs1_addr     <= ex_mem_rs1_addr; //prob dont need
+            //mem_wb_rs2_addr     <= ex_mem_rs2_addr; //prob dont need
             mem_wb_rd_addr      <= ex_mem_rd_addr;
 
-            mem_wb_alu_op       <= ex_mem_alu_op;   //prob dont need
-            mem_wb_alu_a_src    <= ex_mem_alu_a_src;//prob dont need
-            mem_wb_alu_b_src    <= ex_mem_alu_b_src;//prob dont need
+            //mem_wb_alu_op       <= ex_mem_alu_op;   //prob dont need
+            //mem_wb_alu_a_src    <= ex_mem_alu_a_src;//prob dont need
+            //mem_wb_alu_b_src    <= ex_mem_alu_b_src;//prob dont need
 
             mem_wb_wb_src       <= ex_mem_wb_src;
             mem_wb_reg_write    <= ex_mem_reg_write;
 
             mem_wb_mem_read     <= ex_mem_mem_read; //prob dont need
-            mem_wb_mem_write    <= ex_mem_mem_write;//prob dont need
+            //mem_wb_mem_write    <= ex_mem_mem_write;//prob dont need
 
-            mem_wb_branch       <= ex_mem_branch;  //prob dont need
-            mem_wb_jal          <= ex_mem_jal;     //prob dont need
-            mem_wb_jalr         <= ex_mem_jalr;    //prob dont need
+            //mem_wb_branch       <= ex_mem_branch;  //prob dont need
+            //mem_wb_jal          <= ex_mem_jal;     //prob dont need
+            //mem_wb_jalr         <= ex_mem_jalr;    //prob dont need
         end
     end
 
 
     // PIPELINE WB STAGE================================================================================
 
-    // Write-back mux
+    // wb mux
     always @(*) begin
         reg_write   = mem_wb_valid && mem_wb_reg_write;
         rd_addr     = mem_wb_rd_addr;
-
         // everything except a load was already resolved in EX
         wb_data     = (mem_wb_wb_src == `WB_MEM) ? load_data : mem_wb_wb_data;
     end
@@ -402,5 +436,10 @@ module pipelined_datapath #(
     assign dbg_instr     = mem_wb_instr;
     assign dbg_wb_data   = wb_data;
     assign dbg_reg_write = reg_write;
+
+    assign dbg_if_pc        = if_id_pc;
+    assign dbg_retire_valid = mem_wb_valid;
+    assign dbg_stall        = stall;
+    assign dbg_redirect     = redirect;
 
 endmodule

@@ -3,6 +3,12 @@
 // only time we need a stall/bubble in this design is when a consuming reg instr is behind a load.
 // so if the pipeline is valid at id, ex stages and ex has a mem read, we need to allow current
 // ex data to go to mem, but not allow id to go to ex since we want forwarding
+
+// Hazards:
+// RAW between ALU-type producers and consumers -> forwarding (EX stage)
+// RAW from a load to the very next instruction -> 1-cycle stall (hazard_unit)
+// producer in WB, consumer in ID               -> regfile write-through
+
 module hazard_unit (
     // id fields
     input  wire       id_valid,

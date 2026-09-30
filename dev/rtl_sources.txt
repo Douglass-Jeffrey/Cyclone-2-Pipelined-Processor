@@ -1,0 +1,17 @@
+# RTL source files for the pipelined core, relative to dev/src/.
+#
+# Read by the test runners in verif/ and quartus/bench.py, so adding a module to the
+# design means adding one line here.  One file per line; blank lines and
+# anything after '#' are ignored.  Subfolders are fine (e.g. WIP/foo.v).
+#
+# quartus/soc_top.qsf keeps its own list for synthesis -- update it too.
+
+pipeline.v
+ctl.v
+imm_gen.v
+alu.v
+regfile.v
+imem.v
+dmem.v
+hazard_unit.v
+forwarding_unit.v

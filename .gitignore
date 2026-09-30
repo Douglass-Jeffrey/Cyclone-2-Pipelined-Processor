@@ -1,0 +1,14 @@
+quartus/db/
+quartus/incremental_db/
+quartus/.qsys_edit
+quartus/output_files/
+verif/sim.out
+build/
+dev/src/WIP/
+verif/tb/WIP/
+quartus/WIP/
+quartus/*.bin
+quartus/*.elf
+examples/
+__pycache__/
+*.pyc

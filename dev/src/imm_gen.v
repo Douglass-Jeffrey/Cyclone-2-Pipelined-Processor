@@ -2,9 +2,9 @@
 `include "defines.vh"
 
 module imm_gen (
-    input      [31:0] instr,    //full instruction
-    input      [2:0]  imm_type, //immediate type selector
-    output reg [31:0] imm       //generated immediate
+    input      [31:0] instr,
+    input      [2:0]  imm_type,
+    output reg [31:0] imm
 );
     always @(*) begin
         case (imm_type)

@@ -1,0 +1,9 @@
+# -----------------------------------------------------------------------------
+# Quartus II project file for the 5-stage pipelined RV32I core on the
+# Altera Cyclone II FPGA Starter Development Board (EP2C20F484C7N).
+# Open this file in Quartus II 13.0sp1 (Web Edition is fine).
+# -----------------------------------------------------------------------------
+QUARTUS_VERSION = "13.0"
+
+# Revisions
+PROJECT_REVISION = "soc_top"
