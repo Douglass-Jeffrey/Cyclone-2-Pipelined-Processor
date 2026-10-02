@@ -4,27 +4,21 @@
 // Target : Altera Cyclone II FPGA Starter Development Board (EP2C20F484C7N)
 //
 // Two jobs:
-//   1. OBSERVE.  At 3-95 Hz a human can watch the pipeline advance one cycle
+//   1. OBSERVE.  At ~1.5 Hz or single-step a human can watch the pipeline advance one cycle
 //      at a time on the LEDs and 7-segment displays.
-//   2. BENCHMARK.  At 12.5/25 MHz the core runs real programs at speed, stops
+//   2. BENCHMARK.  At 25 MHz the core runs real programs at speed, stops
 //      itself when the program halts, and hands the results back over JTAG so
 //      a script can collect them.  No extra board pins are used.
 //
 // Clocking
-//   CLOCK_50 is the only oscillator.  cpu_clk is derived from it and is the
-//   clock for the CPU and all performance counters.
-//     slow  : one 20 ns pulse every 2^24 CLOCK_50 cycles  (~3 Hz)
-//     med   : one 20 ns pulse every 2^19 CLOCK_50 cycles  (~95 Hz)
-//     fast  : a real 50% duty square wave at 25 MHz (/2) or 12.5 MHz (/4)
-//   The core's measured Fmax is 25.42 MHz, so /2 is the fastest legal rate and
-//   it has very little margin -- /4 is the safe fallback if the board misbehaves.
-//   cpu_clk is always a registered CLOCK_50-aligned signal, so switching modes
-//   or gating it on halt can never produce a runt pulse.
+//   cpu_clk is muxed from CLOCK_50 by SW[9:8], latched on reset:
+//     11: 50 MHz   10: 25 MHz   01: ~1.5 Hz   00: one cycle per KEY1 press
+//   50 MHz fails timing (Fmax ~46 MHz), 25 MHz is the fastest legal rate.
 //
 // Reset
 //   The core resets SYNCHRONOUSLY, so it only notices reset on a rising cpu_clk
-//   edge.  At 3 Hz those are 335 ms apart while a 2^16-cycle power-on pulse
-//   lasts 1.3 ms, so a plain POR would be missed ~99.6% of the time and the
+//   edge.  At 1.5 Hz those are 671 ms apart while a 2^16-cycle power-on pulse
+//   lasts 1.3 ms, so a plain POR would be missed ~99.8% of the time and the
 //   pipeline would come up with random valid bits.  An async-assert /
 //   sync-deassert synchronizer clocked by cpu_clk fixes that.
 // =============================================================================
@@ -54,26 +48,18 @@ module soc_top (
 
     wire rst_request = por | ~KEY[0];
 
-    // Select clock speed debug
-    // Latched while reset is asserted, so the clock source never changes under
-    // a running pipeline.  Set the switches, then press KEY0.
-    //   speed[1] = fast,  speed[0] = the rate within the chosen family
-    //     2'b00 ~3 Hz      2'b01 ~95 Hz      2'b10 25 MHz      2'b11 12.5 MHz
+    // Simple clock speed logic
+    // 2'b11 == 50 MHz, 2'b10 == 25 MHz, 2'b01 == 50/(2^25) MHz = 1.5Hz, 2'b00 == button press CC 
     reg [1:0] speed = 2'b00;
     always @(posedge CLOCK_50)
-        if (rst_request) speed <= SW[3] ? {1'b1, SW[2]} : {1'b0, SW[8]};
+        if (rst_request) speed <= SW[9:8];
+    
+    // free-running divider, bit n is a 50/2^(n+1) MHz square wave
+    reg [24:0] clk_div = 25'd0;
+    always @(posedge CLOCK_50) clk_div <= clk_div + 25'd1;
 
-    // slow-tick divider
-    reg [24:0] div = 25'd0;
-    always @(posedge CLOCK_50) div <= div + 25'd1;
-
-    wire slow_tick = (div[23:0] == 24'd0);
-    wire med_tick  = (div[18:0] == 19'd0);
-    wire run_tick  = speed[0] ? med_tick : slow_tick;
-
-    // /4 needs a half-rate toggle enable; /2 toggles every CLOCK_50 edge
-    reg div2 = 1'b0;
-    always @(posedge CLOCK_50) div2 <= ~div2;
+    wire clk_25mhz = clk_div[0];
+    wire clk_1p5hz = clk_div[24];
 
     // enable one tick per KEY[1] press debounced
     wire step_pulse;
@@ -96,14 +82,16 @@ module soc_top (
         halted_s1 <= halted_s0;
     end
 
-    wire advance = !SW[9]   ? step_pulse
-                 : speed[1] ? (speed[0] ? (div2 ? ~cpu_clk : cpu_clk)  // /4
-                                        : ~cpu_clk)                    // /2
-                 :            run_tick;
 
-    reg cpu_clk_r = 1'b0;
-    always @(posedge CLOCK_50) cpu_clk_r <= advance & ~halted_s1;
-    assign cpu_clk = cpu_clk_r;
+    // clock mux, select is static since speed only changes during reset
+    wire clk_sel = speed[1] ? (speed[0] ? CLOCK_50  : clk_25mhz)
+                            : (speed[0] ? clk_1p5hz : step_pulse);
+
+    // halt gate, enable only changes while CLOCK_50 is low so stopping can't leave a runt pulse
+    reg run_en = 1'b0;
+    always @(negedge CLOCK_50) run_en <= ~halted_s1;
+
+    assign cpu_clk = clk_sel & run_en;
 
     // async reset logic
     reg rst_n_sync = 1'b0;
