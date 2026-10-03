@@ -284,8 +284,8 @@ module pipelined_datapath #(
         .a         (alu_a),
         .b         (alu_b),
         .alu_op    (id_ex_alu_op),
-        .result    (alu_result),
-        .zero_flag (zero_flag)
+        .result    (alu_result)
+        //.zero_flag (zero_flag)
     );
 
     // Decide WB contents 
@@ -298,6 +298,18 @@ module pipelined_datapath #(
         endcase
     end
 
+    // move branch compute logic outside of alu for speedup
+    // we dont have to wait for srl, muxing now
+    // dedicated comparator
+    wire [2:0]  funct3     = id_ex_instr[14:12];
+    wire        bc_beq     = (funct3 == 3'b000)  && (ex_rs1_val == ex_rs2_val);
+    wire        bc_bne     = (funct3 == 3'b001)  && (ex_rs1_val != ex_rs2_val);
+    wire        bc_blt     = (funct3 == 3'b100)  && ($signed(ex_rs1_val) < $signed(ex_rs2_val));
+    wire        bc_bge     = (funct3 == 3'b101)  && ($signed(ex_rs1_val) >= $signed(ex_rs2_val));
+    wire        bc_bltu    = (funct3 == 3'b110)  && (ex_rs1_val < ex_rs2_val);
+    wire        bc_bgeu    = (funct3 == 3'b111)  && (ex_rs1_val >= ex_rs2_val);
+
+/*
     reg cond;
     always @(*) begin
         case (id_ex_instr[14:12]) //funct3
@@ -310,9 +322,15 @@ module pipelined_datapath #(
             default: cond = 1'b0;
         endcase
     end
-
+*/
     // branch / jump indicators
-    wire take_branch = id_ex_branch & cond;
+    wire any_branch =   bc_beq
+                    ||  bc_bne 
+                    ||  bc_blt
+                    ||  bc_bltu
+                    ||  bc_bge
+                    ||  bc_bgeu;
+    wire take_branch = id_ex_branch && any_branch;
     wire jump = id_ex_jal || id_ex_jalr;
 
     // next-PC mux

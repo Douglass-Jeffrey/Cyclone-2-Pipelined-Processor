@@ -4,12 +4,12 @@ module alu (
     input wire [31:0] a,        // first operand
     input wire [31:0] b,        // second operand
     input wire [3:0] alu_op,    // operation selector
-    output reg [31:0] result,   // operation result
-    output wire zero_flag       // zero flag
+    output reg [31:0] result    // operation result
+    //output wire zero_flag       // zero flag
 );
     wire [4:0] shamt = b[4:0];   // only low 5 bits
     
-    assign zero_flag = (result == 32'd0) ? 1'b1 : 1'b0;
+    //assign zero_flag = (result == 32'd0) ? 1'b1 : 1'b0;
     always @(*) begin
         case (alu_op)
             `ALU_ADD:  result = a + b;

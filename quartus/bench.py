@@ -27,7 +27,34 @@ import rvsim  # noqa: E402
 from rtl_sources import rtl_sources  # noqa: E402  (reads dev/rtl_sources.txt)
 
 # must match soc_top.v's speed encoding
-RATES = {0: ("~3 Hz", 3e-6), 1: ("~95 Hz", 95e-6), 2: ("25 MHz", 25.0), 3: ("12.5 MHz", 12.5)}
+RATES = {0: ("step", None), 1: ("~1.5 Hz", 50.0 / 2**25), 2: ("25 MHz", 25.0), 3: ("50 MHz", 50.0)}
+
+# (label, tb_bench.v key) per SW7:5 value, must match soc_top.v's sel_r / readout mux
+BANKS = [
+    ("SW1=1", [("cycles", "cycles"), ("retired", "retired"), ("stalls", "stalls"),
+               ("flushes", "flushes"), ("x28", "x28"), ("x29", "x29"), ("x30", "x30"),
+               ("x31", "x31")]),
+    ("SW1=0", [("retiring pc", "haltpc"), ("retiring instr", "haltinstr"),
+               ("write-back data", "haltwb"), ("pc in ID", "haltifpc"), ("cycles", "cycles"),
+               ("retired", "retired"), ("stalls", "stalls"), ("flushes", "flushes")]),
+]
+
+
+def print_board(v):
+    """Every value the board can display after the halt, per switch setting."""
+    fmt = "  %-6s %-6s %-16s %10s   %s"
+    print("predicted board readings   (SW9:8 = 10 or 11, press KEY0; SW4=1 shows the left hex half)")
+    for sw1, bank in BANKS:
+        print()
+        print(fmt % (sw1, "SW7:5", "reading", "decimal", "hex"))
+        for sel, (label, key) in enumerate(bank):
+            val = v[key]
+            line = fmt % ("", format(sel, "03b"), label, val, "%04X_%04X" % (val >> 16, val & 0xFFFF))
+            # the halt loop alternates ID between the `j .` and the pc after it
+            if key == "haltifpc":
+                other = v["haltpc"] + 4 if val == v["haltpc"] else v["haltpc"]
+                line += "   or %04X_%04X, depends on when the clock stopped" % (other >> 16, other & 0xFFFF)
+            print(line)
 
 
 def main():
@@ -81,20 +108,12 @@ def main():
     cyc, ret = v["cycles"], v["retired"]
 
     print()
-    print("predicted board readings")
-    print("  cycles   : %d" % cyc)
-    print("  retired  : %d" % ret)
-    print("  stalls   : %d   (load-use interlock)" % v["stalls"])
-    print("  flushes  : %d   (taken branch / jump)" % v["flushes"])
+    print_board(v)
+    print()
     print("  CPI      : %.4f" % (cyc / ret))
     for code in (2, 3):
         label, mhz = RATES[code]
         print("  at %-8s: %.3f ms, %.2f MIPS" % (label, cyc / (mhz * 1000.0), ret * mhz / cyc))
-    print()
-    for i in range(4):
-        val = v["x%d" % (28 + i)]
-        print("  x%-2d      : %d   (0x%08X)" % (28 + i, val, val & 0xFFFFFFFF))
-    print("  halt pc  : 0x%08X" % v["haltpc"])
 
     if not args.no_install:
         shutil.copy(hexp, os.path.join(HERE, "program.hex"))

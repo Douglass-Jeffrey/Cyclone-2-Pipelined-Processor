@@ -96,6 +96,9 @@ module tb_bench;
         $display("x30=%0d", result2);
         $display("x31=%0d", result3);
         $display("haltpc=%0d", dbg_pc);
+        $display("haltinstr=%0d", dbg_instr);
+        $display("haltwb=%0d", dbg_wb_data);
+        $display("haltifpc=%0d", dbg_if_pc);
         $finish;
     end
 endmodule
