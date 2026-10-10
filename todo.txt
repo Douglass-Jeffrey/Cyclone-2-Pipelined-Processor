@@ -1,7 +1,0 @@
-Djeffrey todo:
-
-FIx clock muxing, replace with reg clk enables
-Branch prediction addition
-Sram controller, caching dmem and imem
-
-Then do FPGA neural network accellerator or gpu
