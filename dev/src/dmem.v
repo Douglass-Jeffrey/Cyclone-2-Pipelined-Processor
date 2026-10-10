@@ -6,6 +6,7 @@ module dmem #(
     parameter INIT_FILE   = ""
 )(
     input  wire        clk,
+    input  wire        clk_en,
     input  wire        valid,
     input  wire [31:0] addr,       // byte address (ALU result)
     input  wire [2:0]  funct3,     // instr[14:12]
@@ -41,9 +42,11 @@ module dmem #(
     end
 
     always @(posedge clk) begin
-        addr_reg     <= addr;
-        funct3_reg   <= funct3;
-        mem_read_reg <= valid && mem_read;
+        if (clk_en) begin
+            addr_reg     <= addr;
+            funct3_reg   <= funct3;
+            mem_read_reg <= valid && mem_read;
+        end
     end
 
     // Read port. The RAM's own output register supplies the one-cycle
@@ -51,7 +54,11 @@ module dmem #(
     wire [AW-1:0] widx   = addr[AW+1:2];
     wire [1:0]    boff_r = addr_reg[1:0];
     reg  [31:0]   word_r;
-    always @(posedge clk) word_r <= {mem3[widx], mem2[widx], mem1[widx], mem0[widx]};
+    always @(posedge clk) begin
+        if (clk_en) begin
+            word_r <= {mem3[widx], mem2[widx], mem1[widx], mem0[widx]};
+        end
+    end
 
     // load
     always @(*) begin
@@ -88,8 +95,12 @@ module dmem #(
     // one write port per lane; edge case of read during write to the same
     // address cannot matter here, a STORE has mem_read = 0
     wire we = valid && mem_write;
-    always @(posedge clk) if (we && st_be[0]) mem0[widx] <= st_wdata[7:0];
-    always @(posedge clk) if (we && st_be[1]) mem1[widx] <= st_wdata[15:8];
-    always @(posedge clk) if (we && st_be[2]) mem2[widx] <= st_wdata[23:16];
-    always @(posedge clk) if (we && st_be[3]) mem3[widx] <= st_wdata[31:24];
+    always @(posedge clk) begin
+        if (clk_en && we) begin
+            if (st_be[0]) mem0[widx] <= st_wdata[7:0];
+            if (st_be[1]) mem1[widx] <= st_wdata[15:8];        
+            if (st_be[2]) mem2[widx] <= st_wdata[23:16];
+            if (st_be[3]) mem3[widx] <= st_wdata[31:24];
+        end
+    end
 endmodule

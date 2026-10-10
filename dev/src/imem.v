@@ -6,6 +6,7 @@ module imem #(
     parameter INIT_FILE   = "program.hex"
 )(
     input  wire        clk,
+    input  wire        clk_en,
     input  wire [31:0] addr,    // byte address (PC), addr[1:0] assumed 0
     output wire [31:0] instr
 );
@@ -23,7 +24,9 @@ module imem #(
     end
 
     always @(posedge clk) begin
-        addr_reg <= addr;
+        if (clk_en) begin
+            addr_reg <= addr;
+        end
     end
 
     assign instr = mem[addr_reg[AW+1:2]];

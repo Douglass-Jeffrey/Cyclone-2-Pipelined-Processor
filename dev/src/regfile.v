@@ -2,7 +2,7 @@
 
 module regfile (
     input wire clk,
-    input wire rst,
+    input wire clk_en,
     input wire [4:0] rs1_addr,
     input wire [4:0] rs2_addr,
     input wire [4:0] rd_addr,
@@ -24,8 +24,9 @@ module regfile (
     assign rs1_data = (rs1_addr == 5'd0) ? 32'd0 : (wr_hit && rd_addr == rs1_addr) ? rd_data : registers[rs1_addr];
     assign rs2_data = (rs2_addr == 5'd0) ? 32'd0 : (wr_hit && rd_addr == rs2_addr) ? rd_data : registers[rs2_addr];
 
+    //writeback logic
     always @(posedge clk) begin
-        if (rd_we && rd_addr != 5'd0) begin
+        if (clk_en && (rd_we && rd_addr != 5'd0)) begin
             registers[rd_addr] <= rd_data;
         end
     end

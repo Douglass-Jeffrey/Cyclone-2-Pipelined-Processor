@@ -14,8 +14,9 @@
 //   +max=<n>         cycle ceiling before declaring a hang (default 20,000,000)
 module tb_bench;
 
-    reg clk = 0;
-    reg rst = 1;
+    reg clk     = 0;
+    reg rst     = 1;
+    reg clk_en  = 1;
 
     wire [31:0] dbg_pc, dbg_instr, dbg_wb_data, dbg_if_pc;
     wire        dbg_reg_write, dbg_retire_valid, dbg_stall, dbg_redirect;
@@ -23,6 +24,7 @@ module tb_bench;
     pipelined_datapath #(.IMEM_INIT("")) dut (
         .clk              (clk),
         .rst              (rst),
+        .clk_en           (clk_en),
         .dbg_pc           (dbg_pc),
         .dbg_instr        (dbg_instr),
         .dbg_wb_data      (dbg_wb_data),

@@ -9,8 +9,9 @@
 //   +cycles=<n>     how long to run after reset (default 2000)
 module tb_pipeline;
 
-    reg clk = 0;
-    reg rst = 1;
+    reg clk     = 0;
+    reg rst     = 1;
+    reg clk_en  = 1; 
 
     wire [31:0] dbg_pc, dbg_instr, dbg_wb_data;
     wire        dbg_reg_write;
@@ -18,6 +19,7 @@ module tb_pipeline;
     // no INIT_FILE: the program is loaded below through the hierarchy
     pipelined_datapath #(.IMEM_INIT("")) dut (
         .clk           (clk),
+        .clk_en        (clk_en),
         .rst           (rst),
         .dbg_pc        (dbg_pc),
         .dbg_instr     (dbg_instr),

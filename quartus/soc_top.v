@@ -3,24 +3,16 @@
 //
 // Target : Altera Cyclone II FPGA Starter Development Board (EP2C20F484C7N)
 //
-// Two jobs:
-//   1. OBSERVE.  At ~1.5 Hz or single-step a human can watch the pipeline advance one cycle
-//      at a time on the LEDs and 7-segment displays.
-//   2. BENCHMARK.  At 25 MHz the core runs real programs at speed, stops
-//      itself when the program halts, and hands the results back over JTAG so
-//      a script can collect them.  No extra board pins are used.
-//
 // Clocking
-//   cpu_clk is muxed from CLOCK_50 by SW[9:8], latched on reset:
+//   cpu_clk_en is muxed from CLOCK_50 by SW[9:8], latched on reset:
 //     11: 50 MHz   10: 25 MHz   01: ~1.5 Hz   00: one cycle per KEY1 press
 //   50 MHz fails timing (Fmax ~46 MHz), 25 MHz is the fastest legal rate.
 //
 // Reset
-//   The core resets SYNCHRONOUSLY, so it only notices reset on a rising cpu_clk
+//   The core resets SYNCHRONOUSLY, so it only notices reset on a rising CLOCK_50
 //   edge.  At 1.5 Hz those are 671 ms apart while a 2^16-cycle power-on pulse
 //   lasts 1.3 ms, so a plain POR would be missed ~99.8% of the time and the
-//   pipeline would come up with random valid bits.  An async-assert /
-//   sync-deassert synchronizer clocked by cpu_clk fixes that.
+//   pipeline would come up with random valid bits.
 // =============================================================================
 module soc_top (
     input  wire        CLOCK_50,   // 50 MHz oscillator          (PIN_L1)
@@ -34,7 +26,7 @@ module soc_top (
     output wire [6:0]  HEX3
 );
 
-    // ---- power-on reset request -------------------------------------------
+    // power on rst request
     reg [15:0] por_cnt = 16'd0;
     reg        por     = 1'b1;
     always @(posedge CLOCK_50) begin
@@ -46,21 +38,6 @@ module soc_top (
         end
     end
 
-    wire rst_request = por | ~KEY[0];
-
-    // Simple clock speed logic
-    // 2'b11 == 50 MHz, 2'b10 == 25 MHz, 2'b01 == 50/(2^25) MHz = 1.5Hz, 2'b00 == button press CC 
-    reg [1:0] speed = 2'b00;
-    always @(posedge CLOCK_50)
-        if (rst_request) speed <= SW[9:8];
-    
-    // free-running divider, bit n is a 50/2^(n+1) MHz square wave
-    reg [24:0] clk_div = 25'd0;
-    always @(posedge CLOCK_50) clk_div <= clk_div + 25'd1;
-
-    wire clk_25mhz = clk_div[0];
-    wire clk_1p5hz = clk_div[24];
-
     // enable one tick per KEY[1] press debounced
     wire step_pulse;
     debounce_pulse #(.STABLE(16)) u_step (
@@ -70,32 +47,41 @@ module soc_top (
         .pulse (step_pulse)
     );
 
-    wire cpu_clk;
-    wire halted;
+    wire rst_request = por | ~KEY[0];
+
+    // Simple clock speed logic
+    // 2'b11 == 50 MHz, 2'b10 == 25 MHz, 2'b01 == 50/(2^25) MHz = 1.5Hz, 2'b00 == button press CC 
+    reg [1:0] speed = 2'b00;
+    always @(posedge CLOCK_50) begin
+        if (rst_request) speed <= SW[9:8];
+    end    
+
+    // free-running divider, bit n is a 50/2^(n+1) MHz square wave
+    reg [24:0] clk_div = 25'd0;
+    always @(posedge CLOCK_50) begin
+        clk_div <= clk_div + 25'd1;
+    end
+
+    wire clk_25mhz = clk_div[0];
+    wire clk_1p5hz = clk_div == 25'd0;
+
+    // clock enable select
+    wire clk_en_sel = speed[1] ? (speed[0] ? 1'b1  : clk_25mhz)
+                               : (speed[0] ? clk_1p5hz : step_pulse);
 
     // Freeze clock on program halt so we can examine final values.
-    // halted crosses from cpu_clk into
-    // CLOCK_50, so synchronise it; it only ever transitions once.
+    wire halted;
     reg halted_s0 = 1'b0, halted_s1 = 1'b0;
     always @(posedge CLOCK_50) begin
         halted_s0 <= halted;
         halted_s1 <= halted_s0;
     end
 
-
-    // clock mux, select is static since speed only changes during reset
-    wire clk_sel = speed[1] ? (speed[0] ? CLOCK_50  : clk_25mhz)
-                            : (speed[0] ? clk_1p5hz : step_pulse);
-
-    // halt gate, enable only changes while CLOCK_50 is low so stopping can't leave a runt pulse
-    reg run_en = 1'b0;
-    always @(negedge CLOCK_50) run_en <= ~halted_s1;
-
-    assign cpu_clk = clk_sel & run_en;
+    wire cpu_clk_en = clk_en_sel & ~halted_s1;
 
     // async reset logic
     reg rst_n_sync = 1'b0;
-    always @(posedge cpu_clk or posedge rst_request) begin
+    always @(posedge CLOCK_50 or posedge rst_request) begin
         if (rst_request) rst_n_sync <= 1'b0;
         else             rst_n_sync <= 1'b1;
     end
@@ -109,8 +95,9 @@ module soc_top (
         .RESET_PC  (32'h0000_0000),
         .IMEM_INIT ("program.hex")
     ) u_cpu (
-        .clk              (cpu_clk),
+        .clk              (CLOCK_50),
         .rst              (rst),
+        .clk_en           (cpu_clk_en),
         .dbg_pc           (dbg_pc),
         .dbg_instr        (dbg_instr),
         .dbg_wb_data      (dbg_wb_data),
@@ -123,14 +110,14 @@ module soc_top (
 
     // Detect halts
     // `j .` (jal x0, 0) encodes as 0x0000006F and is the idiom every test and
-    // benchmark here ends with -- the same one the Python reference model uses
+    // benchmark here ends with the same one the Python reference model uses
     // to stop.  Retiring it once means the program is done.
     localparam [31:0] HALT_INSTR = 32'h0000_006F;
 
     reg halted_r = 1'b0;
-    always @(posedge cpu_clk or posedge rst) begin
-        if (rst)                                                    halted_r <= 1'b0;
-        else if (dbg_retire_valid && (dbg_instr == HALT_INSTR))     halted_r <= 1'b1;
+    always @(posedge CLOCK_50 or posedge rst) begin
+        if (rst)                                                              halted_r <= 1'b0;
+        else if (cpu_clk_en && dbg_retire_valid && (dbg_instr == HALT_INSTR)) halted_r <= 1'b1;
     end
     assign halted = halted_r;
 
@@ -142,13 +129,13 @@ module soc_top (
     reg [31:0] retired = 32'd0;
     reg [31:0] stalls  = 32'd0;
     reg [31:0] flushes = 32'd0;
-    always @(posedge cpu_clk or posedge rst) begin
+    always @(posedge CLOCK_50 or posedge rst) begin
         if (rst) begin
             cyc     <= 32'd0;
             retired <= 32'd0;
             stalls  <= 32'd0;
             flushes <= 32'd0;
-        end else if (!halted_r) begin
+        end else if (cpu_clk_en && !halted_r) begin
             cyc <= cyc + 32'd1;
             if (dbg_retire_valid) retired <= retired + 32'd1;
             if (dbg_stall)        stalls  <= stalls  + 32'd1;
@@ -163,12 +150,12 @@ module soc_top (
 
     reg [31:0] result0 = 32'd0, result1 = 32'd0,
                result2 = 32'd0, result3 = 32'd0;
-    always @(posedge cpu_clk or posedge rst) begin
+    always @(posedge CLOCK_50 or posedge rst) begin
         if (rst) begin
             result0 <= 32'd0; result1 <= 32'd0;
             result2 <= 32'd0; result3 <= 32'd0;
         end else if (capture) begin
-            case (retire_rd[1:0])
+            case (cpu_clk_en && retire_rd[1:0])
                 2'd0: result0 <= dbg_wb_data;   // x28 / t3
                 2'd1: result1 <= dbg_wb_data;   // x29 / t4
                 2'd2: result2 <= dbg_wb_data;   // x30 / t5

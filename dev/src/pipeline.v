@@ -8,6 +8,7 @@ module pipelined_datapath #(
 ) (
     input  wire        clk,
     input  wire        rst,
+    input  wire        clk_en,
     // output for instructions retiring this cycle fed to TB, quartus board wrapper
     output wire [31:0] dbg_pc,
     output wire [31:0] dbg_instr,
@@ -51,15 +52,19 @@ module pipelined_datapath #(
         .DEPTH_WORDS (512),
         .INIT_FILE   (IMEM_INIT)
     ) u_imem (
-        .clk   (clk),
-        .addr  (next_pc),
-        .instr (if_id_instr)
+        .clk    (clk),
+        .clk_en (clk_en),
+        .addr   (next_pc),
+        .instr  (if_id_instr)
     );
 
     //pipeline logic
     always @(posedge clk) begin
         if (rst) begin
             if_id_pc    <= RESET_PC - 32'd4;
+            if_id_valid <= 1'b0;
+        end
+        else if (!clk_en) begin
             if_id_valid <= 1'b0;
         end
         else begin
@@ -116,7 +121,7 @@ module pipelined_datapath #(
 
     regfile u_rf (
         .clk      (clk),
-        .rst      (rst),
+        .clk_en   (clk_en),
         .rs1_addr (rs1_addr),
         .rs2_addr (rs2_addr),
         .rd_addr  (rd_addr),
@@ -170,35 +175,39 @@ module pipelined_datapath #(
         if (rst) begin
             id_ex_valid <= 1'b0;
         end
-        // occurs on load->use stall, or redirect
-        else if (ex_bubble) begin
+        else if (clk_en) begin
+            // occurs on load->use stall, or redirect
+            if (ex_bubble) begin
+                id_ex_valid <= 1'b0;
+            end
+            else begin
+                id_ex_valid     <= if_id_valid;
+                id_ex_pc        <= if_id_pc;
+                id_ex_instr     <= if_id_instr;
+                id_ex_imm       <= imm;
+
+                id_ex_rs1_data  <= rs1_data;
+                id_ex_rs2_data  <= rs2_data;
+                id_ex_rs1_addr  <= rs1_addr;
+                id_ex_rs2_addr  <= rs2_addr;
+                id_ex_rd_addr   <= id_rd_addr;
+
+                id_ex_alu_op    <= alu_op;
+                id_ex_alu_a_src <= alu_a_src;
+                id_ex_alu_b_src <= alu_b_src;
+
+                id_ex_wb_src    <= wb_src;
+                id_ex_reg_write <= id_reg_write;
+
+                id_ex_mem_read  <= mem_read;
+                id_ex_mem_write <= mem_write;
+
+                id_ex_branch    <= branch;
+                id_ex_jal       <= jal;
+                id_ex_jalr      <= jalr;
+            end
+        end else begin
             id_ex_valid <= 1'b0;
-        end
-        else begin
-            id_ex_valid     <= if_id_valid;
-            id_ex_pc        <= if_id_pc;
-            id_ex_instr     <= if_id_instr;
-            id_ex_imm       <= imm;
-
-            id_ex_rs1_data  <= rs1_data;
-            id_ex_rs2_data  <= rs2_data;
-            id_ex_rs1_addr  <= rs1_addr;
-            id_ex_rs2_addr  <= rs2_addr;
-            id_ex_rd_addr   <= id_rd_addr;
-
-            id_ex_alu_op    <= alu_op;
-            id_ex_alu_a_src <= alu_a_src;
-            id_ex_alu_b_src <= alu_b_src;
-
-            id_ex_wb_src    <= wb_src;
-            id_ex_reg_write <= id_reg_write;
-
-            id_ex_mem_read  <= mem_read;
-            id_ex_mem_write <= mem_write;
-
-            id_ex_branch    <= branch;
-            id_ex_jal       <= jal;
-            id_ex_jalr      <= jalr;
         end
     end
 
@@ -345,6 +354,9 @@ module pipelined_datapath #(
         if (rst) begin
             ex_mem_valid <= 1'b0;
         end
+        else if (!clk_en) begin
+            ex_mem_valid <= 1'b0;
+        end
         else begin
             ex_mem_valid        <= id_ex_valid;
             ex_mem_pc           <= id_ex_pc;
@@ -394,6 +406,7 @@ module pipelined_datapath #(
         .DEPTH_WORDS (256)
     ) u_dmem (
         .clk       (clk),
+        .clk_en    (clk_en),
         .valid     (ex_mem_valid),
         .addr      (ex_mem_alu_result), // read addr for load, store computed from alu
         .funct3    (ex_mem_instr[14:12]),
@@ -406,6 +419,9 @@ module pipelined_datapath #(
     //mem_wb allocations:
     always @(posedge clk) begin
         if (rst) begin
+            mem_wb_valid        <= 1'b0;
+        end
+        else if (!clk_en) begin
             mem_wb_valid        <= 1'b0;
         end
         else begin
