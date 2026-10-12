@@ -7,6 +7,7 @@ build/
 dev/src/WIP/
 verif/tb/WIP/
 quartus/WIP/
+quartus/simulation/
 quartus/*.bin
 quartus/*.elf
 examples/
