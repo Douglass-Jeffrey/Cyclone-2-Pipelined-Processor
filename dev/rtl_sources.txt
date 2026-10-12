@@ -15,3 +15,4 @@ imem.v
 dmem.v
 hazard_unit.v
 forwarding_unit.v
+branch_predictor.v

@@ -1,5 +1,5 @@
-# Branches and jumps with no prediction: wrong-path instructions must be
-# squashed and must not change any state (registers or memory).
+# Branches and jumps: wrong-path instructions, whether behind a mispredict or
+# a jalr, must be squashed and must not change any state (registers or memory).
 #
 # EXPECT x3 = 0
 # EXPECT x4 = 0

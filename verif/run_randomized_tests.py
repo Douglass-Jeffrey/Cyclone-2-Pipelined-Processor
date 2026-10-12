@@ -5,10 +5,12 @@
     python verif/run_randomized_tests.py --count 1000     more programs
     python verif/run_randomized_tests.py --seed 17        just program 17, with full output
     python verif/run_randomized_tests.py --name fix_fwd   choose the build folder's name
+    python verif/run_randomized_tests.py --clken rand     random clk_en pattern too
 
 Programs come from verif/tools/randgen.py.  The same seed always produces the
-same program, so a failure can be reproduced exactly with --seed.  Only
-failures are printed, plus a progress line every 50 programs.
+same program (and, with --clken rand, the same clk_en pattern), so a failure
+can be reproduced exactly with --seed.  Only failures are printed, plus a
+progress line every 50 programs.
 
 Output: build/<run>/rand_<seed>/  program.S .hex .elf .bin, trace.txt, dump.txt
 <run> is random_YYYY-MM-DD_HH-MM-SS unless --name is given.
@@ -30,6 +32,8 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, help="run just this one program, with full output")
     ap.add_argument("--name", help="build folder name (default: random_<date>_<time>)")
     ap.add_argument("--dev", default=harness.DEV_DIR, help="design folder to test")
+    ap.add_argument("--clken", choices=harness.CLKEN_MODES, default="full",
+                    help="clk_en pattern in tb_pipeline.v (default: full)")
     args = ap.parse_args(argv)
 
     seeds = [args.seed] if args.seed is not None else list(range(args.count))
@@ -44,9 +48,10 @@ def main(argv=None):
         src = folder + "/program.S"
         open(src, "w").write(gen_random(s))
         words = rvsim.assemble(src, folder + "/program.hex")
-        errors, n, stalls = harness.check_against_ref(vvp, words, folder)
+        errors, n, stalls, flushes = harness.check_against_ref(vvp, words, folder,
+                                                               clken=args.clken, seed=s)
         if errors or args.seed is not None:
-            failures += harness.report("%s  [%s]" % (name, src), errors, n, stalls)
+            failures += harness.report("%s  [%s]" % (name, src), errors, n, stalls, flushes)
         elif s % 50 == 0:
             print("ok    random 0..%d so far" % s)
     print("random programs: %d run" % len(seeds))

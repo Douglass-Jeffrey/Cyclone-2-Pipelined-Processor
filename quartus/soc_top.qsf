@@ -29,6 +29,7 @@ set_global_assignment -name VERILOG_FILE ../dev/src/imem.v
 set_global_assignment -name VERILOG_FILE ../dev/src/dmem.v
 set_global_assignment -name VERILOG_FILE ../dev/src/hazard_unit.v
 set_global_assignment -name VERILOG_FILE ../dev/src/forwarding_unit.v
+set_global_assignment -name VERILOG_FILE ../dev/src/branch_predictor.v
 
 # Timing
 set_global_assignment -name SDC_FILE soc_top.sdc

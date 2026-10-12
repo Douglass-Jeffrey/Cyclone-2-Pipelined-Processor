@@ -5,6 +5,8 @@
     python verif/run_directed_tests.py --list verif/test_lists/stall_only.txt
     python verif/run_directed_tests.py --test t2_load_use.S   just one test
     python verif/run_directed_tests.py --name fix_fwd         choose the build folder's name
+    python verif/run_directed_tests.py --clken half           clk_en low every other cycle
+    python verif/run_directed_tests.py --clken rand --seed 7  random clk_en pattern 7
 
 A test list has one file name per line, exactly as it appears in
 verif/test_scripts/ (e.g. t2_load_use.S), so names can be pasted straight in;
@@ -14,6 +16,11 @@ reference model and the RTL so the model is not taken on trust:
     # EXPECT x5 = 13        final value of a register
     # EXPECT m2 = 0x55      final value of a data-memory word
     # EXPECT stalls = 1     exact number of load-use stall cycles (RTL only)
+    # EXPECT flushes = 2    exact number of front-end flushes: branch mispredicts
+    #                       plus jalr (RTL only)
+
+Stall and flush counts are taken on enabled cycles only, so every test must
+pass unchanged under every --clken mode.
 
 Output: build/<run>/<test>/  program.hex .elf .bin, trace.txt, dump.txt
 <test> is the file name without its extension (t2_load_use.S -> t2_load_use/).
@@ -65,18 +72,18 @@ def read_test_list(path):
     return files
 
 
-# Read a .S file's annotations: ([(kind, index, value), ...], stalls or None)
+# Read a .S file's annotations: ([(kind, index, value), ...], stalls or None, flushes or None)
 def parse_expect(path):
-    values, stalls = [], None
+    values, counts = [], {}
     for line in open(path):
-        m = re.match(r"#\s*EXPECT\s+stalls\s*=\s*(\d+)", line)
+        m = re.match(r"#\s*EXPECT\s+(stalls|flushes)\s*=\s*(\d+)", line)
         if m:
-            stalls = int(m.group(1))
+            counts[m.group(1)] = int(m.group(2))
             continue
         m = re.match(r"#\s*EXPECT\s+([xm])(\d+)\s*=\s*(-?\w+)", line)
         if m:
             values.append((m.group(1), int(m.group(2)), int(m.group(3), 0) & 0xFFFFFFFF))
-    return values, stalls
+    return values, counts.get("stalls"), counts.get("flushes")
 
 
 def main(argv=None):
@@ -86,6 +93,9 @@ def main(argv=None):
     ap.add_argument("--test", help="run just this one test file, e.g. t2_load_use.S (overrides --list)")
     ap.add_argument("--name", help="build folder name (default: directed_<date>_<time>)")
     ap.add_argument("--dev", default=harness.DEV_DIR, help="design folder to test")
+    ap.add_argument("--clken", choices=harness.CLKEN_MODES, default="full",
+                    help="clk_en pattern in tb_pipeline.v (default: full)")
+    ap.add_argument("--seed", type=int, default=1, help="seed for --clken rand (default: 1)")
     args = ap.parse_args(argv)
 
     # decide what to run before creating anything, so a typo leaves no empty folder
@@ -107,8 +117,9 @@ def main(argv=None):
         folder = run_dir + "/" + name
         os.makedirs(folder)
         words = rvsim.assemble(src, folder + "/program.hex")
-        values, stalls = parse_expect(src)
-        failures += harness.report(name, *harness.check_against_ref(vvp, words, folder, values, stalls))
+        values, stalls, flushes = parse_expect(src)
+        failures += harness.report(name, *harness.check_against_ref(
+            vvp, words, folder, values, stalls, flushes, args.clken, args.seed))
 
     return harness.finish(failures, run_dir)
 

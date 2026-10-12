@@ -11,9 +11,11 @@ What the generator is biased towards, and why:
   * x0 as a source and destination, which forwarding must never treat as real;
   * legal, aligned addresses inside the first 128 bytes of data memory (andi
     masks), so loads and stores collide with each other often;
-  * forward-only branches and jumps, so every program is guaranteed to reach
-    its final `j .` and halt.  Backward branches (loops) are therefore covered
-    only by the directed tests.
+  * forward branches and jumps, plus bounded backward loops counted down in
+    x12 (which nothing else writes), so every program still reaches its final
+    `j .` and halts.  The loops train the branch predictor taken and then
+    mispredict on exit; an optional branch inside the body mixes taken and
+    not-taken at one pc.
 """
 import random
 
@@ -50,12 +52,24 @@ def gen_random(seed, ngroups=120):
     def imm12():
         return rnd.choice([0, 1, -1, 2047, -2048, rnd.randint(-2048, 2047), rnd.randint(-64, 64)])
 
+    def alu():
+        d = dst(); s1 = src(); s2 = src(); wrote(d)
+        return "%s x%d, x%d, x%d" % (rnd.choice(R_OPS), d, s1, s2)
+
     groups = []          # each: dict(lines=[...], target=None|index)
     for i in range(ngroups):
         k = rnd.random()
-        if k < 0.28:
+        if k < 0.24:
             d = dst(); s1 = src(); s2 = src()
             g = ["%s x%d, x%d, x%d" % (rnd.choice(R_OPS), d, s1, s2)]; wrote(d)
+            groups.append(dict(lines=g))
+        elif k < 0.28:
+            # loop of 1..5 iterations; the inner branch only ever skips forward
+            body = [alu()]
+            if rnd.random() < 0.5:
+                body += ["%s x%d, x%d, C%d" % (rnd.choice(BR_OPS), src(), src(), i), alu(), "C%d:" % i]
+            g = ["addi x12, x0, %d" % rnd.randint(1, 5), "B%d:" % i] + body + \
+                ["addi x12, x12, -1", "bne x12, x0, B%d" % i]
             groups.append(dict(lines=g))
         elif k < 0.50:
             d = dst(); s1 = src()

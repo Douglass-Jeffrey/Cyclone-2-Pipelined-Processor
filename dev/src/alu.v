@@ -1,9 +1,9 @@
 `include "defines.vh"
 
 module alu (
-    input wire [31:0] a,        // first operand
-    input wire [31:0] b,        // second operand
-    input wire [3:0] alu_op,    // operation selector
+    input wire  [31:0] a,        // first operand
+    input wire  [31:0] b,        // second operand
+    input wire  [3:0] alu_op,    // operation selector
     output reg [31:0] result    // operation result
     //output wire zero_flag       // zero flag
 );

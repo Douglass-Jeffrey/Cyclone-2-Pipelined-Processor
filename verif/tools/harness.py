@@ -27,11 +27,15 @@ TEST_SCRIPTS = PROJECT + "/verif/test_scripts"
 # lists of directed tests to run
 TEST_LISTS   = PROJECT + "/verif/test_lists"
 
-# the testbench
-TB_PIPELINE  = PROJECT + "/verif/tb/tb_pipeline.v"
+# the testbenches
+TB_DIR       = PROJECT + "/verif/tb"
+TB_PIPELINE  = TB_DIR + "/tb_pipeline.v"
 
 # one sub-folder per run
 BUILD_ROOT   = PROJECT + "/build"
+
+# tb_pipeline.v's +clken patterns; results must not depend on which one runs
+CLKEN_MODES  = ("full", "half", "rand")
 
 
 # Make a new build/<name>/ for this run; never reuse or overwrite an old one
@@ -47,11 +51,18 @@ def new_run_dir(kind, name=None):
     return run_dir
 
 
+# Compile a testbench against every RTL file; top (iverilog -s) picks the one
+# root module, so the design's own top is not elaborated alongside a unit test
+def compile_tb(dev_dir, vvp, tb, top=None):
+    cmd = ["iverilog", "-g2005", "-I", dev_dir, "-o", vvp] + (["-s", top] if top else []) + \
+          [tb] + rtl_sources(dev_dir)
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
 # Compile TB and DUT once, use same built pair for each test
 def build_rtl(dev_dir, run_dir):
     vvp = run_dir + "/tb_pipeline.vvp"
-    cmd = ["iverilog", "-g2005", "-I", dev_dir, "-o", vvp, TB_PIPELINE] + rtl_sources(dev_dir)
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = compile_tb(dev_dir, vvp, TB_PIPELINE)
     if r.returncode != 0:
         print(r.stdout + r.stderr)
         sys.exit("RTL failed to compile")
@@ -59,13 +70,13 @@ def build_rtl(dev_dir, run_dir):
 
 
 # Run compiled TB in test_folder
-def run_rtl(vvp, test_folder, cycles):
+def run_rtl(vvp, test_folder, cycles, clken="full", seed=1):
     """Run the compiled testbench INSIDE test_folder.
 
     tb_pipeline.v reads program.hex and writes trace.txt / dump.txt there by
     fixed name, so no path is ever passed into the simulation.
     """
-    r = subprocess.run(["vvp", vvp, "+cycles=%d" % cycles],
+    r = subprocess.run(["vvp", vvp, "+cycles=%d" % cycles, "+clken=%s" % clken, "+seed=%d" % seed],
                        cwd=test_folder, capture_output=True, text=True)
     trace = test_folder + "/trace.txt"
     dump = test_folder + "/dump.txt"
@@ -74,24 +85,25 @@ def run_rtl(vvp, test_folder, cycles):
     if r.returncode != 0 or "ERROR" in r.stdout + r.stderr or not os.path.exists(dump):
         raise RuntimeError("simulation failed:\n" + r.stdout + r.stderr)
 
-    m = re.search(r"stalls=(\d+)", r.stdout)
-    stalls = int(m.group(1)) if m else -1
+    counts = {k: int(v) for k, v in re.findall(r"(stalls|flushes)=(\d+)", r.stdout)}
+    stalls, flushes = counts.get("stalls", -1), counts.get("flushes", -1)
     rtl_trace = [l.strip() for l in open(trace) if l.strip()]
     regs, mem = {}, {}
     for l in open(dump):
         k, v = l.split()
         (regs if k[0] == "x" else mem)[int(k[1:])] = int(v, 16)
-    return rtl_trace, regs, mem, stalls
+    return rtl_trace, regs, mem, stalls, flushes
 
 
 # ---- checking one program --------------------------------------------------
-def check_against_ref(vvp, words, test_folder, expect=None, expect_stalls=None):
-    """Run a program on the RTL and the model; return (errors, n_instr, stalls)."""
+def check_against_ref(vvp, words, test_folder, expect=None, expect_stalls=None,
+                      expect_flushes=None, clken="full", seed=1):
+    """Run a program on the RTL and the model; return (errors, n_instr, stalls, flushes)."""
     ref = rvsim.Ref(words)
     ref.run()
     ref_trace = rvsim.trace_lines(ref.trace)
-    cycles = 3 * len(ref_trace) + 60          # generous: CPI stays well under 3
-    rtl_trace, regs, mem, stalls = run_rtl(vvp, test_folder, cycles)
+    cycles = 3 * len(ref_trace) + 60          # enabled cycles; generous: CPI stays well under 3
+    rtl_trace, regs, mem, stalls, flushes = run_rtl(vvp, test_folder, cycles, clken, seed)
     errors = []
 
     # 1. did it retire everything?
@@ -138,13 +150,19 @@ def check_against_ref(vvp, words, test_folder, expect=None, expect_stalls=None):
         errors.append("EXPECT stalls = %d but the RTL stalled %d cycle(s)"
                       % (expect_stalls, stalls))
 
-    return errors, len(ref_trace), stalls
+    # 7. exact flush count -- same reasoning: a predictor that never predicts
+    #    taken is still correct, just slow
+    if expect_flushes is not None and flushes != expect_flushes:
+        errors.append("EXPECT flushes = %d but the RTL flushed %d time(s)"
+                      % (expect_flushes, flushes))
+
+    return errors, len(ref_trace), stalls, flushes
 
 
 # Print one test's result; returns 1 if it failed, else 0
-def report(name, errors, n, stalls):
+def report(name, errors, n, stalls, flushes):
     if not errors:
-        print("ok    %-28s (%d instr, %d load-use stalls)" % (name, n, stalls))
+        print("ok    %-28s (%d instr, %d load-use stalls, %d flushes)" % (name, n, stalls, flushes))
         return 0
     print("FAIL  %-28s (%d instr)" % (name, n))
     for e in errors[:8]:

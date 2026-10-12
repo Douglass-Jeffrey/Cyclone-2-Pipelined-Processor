@@ -3,6 +3,7 @@
 
     python bench.py programs/bench_sort.S          assemble + simulate + install
     python bench.py programs/bench_sort.S --no-install   just predict
+    python bench.py programs/bench_sort.S --clken half   simulate the 25 MHz clk_en pattern
 
 Prints exactly the figures `read_results.tcl` will report from the board, so a
 run is verified rather than merely observed: same halt rule, same counters,
@@ -65,6 +66,8 @@ def main():
     ap.add_argument("--no-sim", action="store_true",
                     help="skip the prediction (for demos that never halt)")
     ap.add_argument("--max", type=int, default=20_000_000, help="cycle ceiling")
+    ap.add_argument("--clken", choices=("full", "half", "rand"), default="full",
+                    help="clk_en pattern; the counters only see enabled cycles, so all agree")
     args = ap.parse_args()
 
     # build/bench/tb_bench.vvp is shared; each program gets build/bench/<name>/
@@ -95,7 +98,7 @@ def main():
     if r.returncode:
         sys.exit(r.stdout + r.stderr)
 
-    r = subprocess.run(["vvp", vvp, "+max=%d" % args.max], cwd=build,
+    r = subprocess.run(["vvp", vvp, "+max=%d" % args.max, "+clken=%s" % args.clken], cwd=build,
                        capture_output=True, text=True)
     out = r.stdout
     if "ERROR" in out + r.stderr:          # e.g. $readmemh could not open the program

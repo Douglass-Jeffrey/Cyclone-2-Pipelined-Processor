@@ -12,6 +12,10 @@
 // path ever passes through Verilog.
 //
 //   +max=<n>         cycle ceiling before declaring a hang (default 20,000,000)
+//   +clken=<mode>    clk_en pattern: full (default), half (the board's 25 MHz
+//                    setting) or rand; counters only advance on enabled
+//                    cycles, as on the board, so every mode reports the same
+//   +seed=<n>        seed for +clken=rand (default 1)
 module tb_bench;
 
     reg clk     = 0;
@@ -37,6 +41,17 @@ module tb_bench;
 
     always #5 clk = ~clk;
 
+    reg [8*4-1:0] clken_mode;
+    integer       seed;
+
+    // clk_en for the next rising edge is picked just after this one
+    always @(posedge clk) begin
+        #1;
+        if      (clken_mode == "half") clk_en = !clk_en;
+        else if (clken_mode == "rand") clk_en = $random(seed);
+        else                           clk_en = 1'b1;
+    end
+
     localparam [31:0] HALT_INSTR = 32'h0000_006F;
 
     reg        halted  = 0;
@@ -48,12 +63,12 @@ module tb_bench;
                            (retire_rd[4:2] == 3'b111) && !halted;
 
     // same edge, same order of effects as the wrapper: the halting `j .` is
-    // itself counted, then everything freezes
+    // itself counted, then everything freezes; disabled cycles count nothing
     always @(posedge clk) begin
         if (rst) begin
             halted  <= 0; cyc <= 0; retired <= 0; stalls <= 0; flushes <= 0;
             result0 <= 0; result1 <= 0; result2 <= 0; result3 <= 0;
-        end else if (!halted) begin
+        end else if (clk_en && !halted) begin
             cyc <= cyc + 1;
             if (dbg_retire_valid) retired <= retired + 1;
             if (dbg_stall)        stalls  <= stalls  + 1;
@@ -74,6 +89,12 @@ module tb_bench;
 
     initial begin
         if (!$value$plusargs("max=%d", maxcyc)) maxcyc = 20000000;
+        if (!$value$plusargs("clken=%s", clken_mode)) clken_mode = "full";
+        if (!$value$plusargs("seed=%d", seed)) seed = 1;
+        if (clken_mode != "full" && clken_mode != "half" && clken_mode != "rand") begin
+            $display("ERROR: +clken must be full, half or rand");
+            $finish;
+        end
 
         #1 $readmemh("program.hex", dut.u_imem.mem);
         repeat (3) @(posedge clk);

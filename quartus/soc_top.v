@@ -154,8 +154,8 @@ module soc_top (
         if (rst) begin
             result0 <= 32'd0; result1 <= 32'd0;
             result2 <= 32'd0; result3 <= 32'd0;
-        end else if (capture) begin
-            case (cpu_clk_en && retire_rd[1:0])
+        end else if (capture && cpu_clk_en) begin
+            case (retire_rd[1:0])
                 2'd0: result0 <= dbg_wb_data;   // x28 / t3
                 2'd1: result1 <= dbg_wb_data;   // x29 / t4
                 2'd2: result2 <= dbg_wb_data;   // x30 / t5

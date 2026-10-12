@@ -13,3 +13,9 @@ t2_load_use.S
 t3_control_flow.S
 t4_memory_ops.S
 t5_store_hazards.S
+
+# branch prediction: exact flush counts, and stall/redirect priority over a prediction
+bp_loop.S
+bp_jumps.S
+bp_stall_branch.S
+bp_redirect_priority.S

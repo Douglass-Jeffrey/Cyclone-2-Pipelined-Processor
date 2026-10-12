@@ -1,7 +1,7 @@
 `include "defines.vh"
 
 //multi-cycle pipelined RV32I datapath
-// no BP yet, all are implicitely not taken 
+// 2-bit branch predictor in ID, branches checked in EX
 module pipelined_datapath #(
     parameter RESET_PC  = 32'h0000_0000,
     parameter IMEM_INIT = "program.hex"
@@ -25,6 +25,9 @@ module pipelined_datapath #(
     //for branches, jal, jalr, auipc
     wire redirect;
     wire [31:0] redirect_pc;
+    wire b_p;
+    wire [31:0] branch_pred_pc;
+    wire bp_upd_valid, bp_upd_taken;
 
     // hold pc and if/id stable when a dmem accessing RAW dependency occurs
     wire stall;    
@@ -34,15 +37,12 @@ module pipelined_datapath #(
     reg  [31:0] if_id_pc;       // pc of instr in id
     reg         if_id_valid;
 
-    //DJEF BP STUFF HERE LATER (including defined BP module)
-    //for branch prediction to occur in IF stage we need to be able to read the instr in the if stage
-    //we just need to parse
-
     // next_pc sent to id stage will be redirected if theres a branch or jump
     // else if theres a stall send the same PC again, else increment by 4 to get next instr
     wire [31:0] next_pc = redirect ? redirect_pc
-            : stall ? if_id_pc
-            : if_id_pc + 32'd4;
+                                   : stall ? if_id_pc
+                                   : b_p ? branch_pred_pc
+                                   : if_id_pc + 32'd4;
 
     // fetch instruction from memory
     // the M4K mem blocks can latch addr then present data on next CC
@@ -59,15 +59,13 @@ module pipelined_datapath #(
     );
 
     //pipeline logic
+    // clk_en low holds every stage, valid bits included (clearing them drops the instr)
     always @(posedge clk) begin
         if (rst) begin
             if_id_pc    <= RESET_PC - 32'd4;
             if_id_valid <= 1'b0;
         end
-        else if (!clk_en) begin
-            if_id_valid <= 1'b0;
-        end
-        else begin
+        else if (clk_en) begin
             if_id_pc    <= next_pc;
             if_id_valid <= 1'b1;
         end
@@ -152,7 +150,26 @@ module pipelined_datapath #(
     reg        id_ex_branch;
     reg        id_ex_jal;
     reg        id_ex_jalr;
+    reg        id_ex_b_p;
     reg        id_ex_valid;
+
+    // predicts the instr in ID, trained by the branch resolving in EX
+    branch_predictor u_bp (
+    .clk                (clk),
+    .rst                (rst),
+    .clk_en             (clk_en),
+    .valid              (if_id_valid),
+    .pc                 (if_id_pc),
+    .jal                (jal),
+    .jalr               (jalr),
+    .branch             (branch),
+    .imm                (imm),
+    .pred_take_branch   (b_p),
+    .bp_pc              (branch_pred_pc),
+    .upd_valid          (bp_upd_valid),
+    .upd_pc             (id_ex_pc),
+    .upd_taken          (bp_upd_taken)
+    );
 
     wire ex_bubble;
     hazard_unit u_hazard (
@@ -205,9 +222,8 @@ module pipelined_datapath #(
                 id_ex_branch    <= branch;
                 id_ex_jal       <= jal;
                 id_ex_jalr      <= jalr;
+                id_ex_b_p       <= b_p;
             end
-        end else begin
-            id_ex_valid <= 1'b0;
         end
     end
 
@@ -340,24 +356,29 @@ module pipelined_datapath #(
                     ||  bc_bge
                     ||  bc_bgeu;
     wire take_branch = id_ex_branch && any_branch;
-    wire jump = id_ex_jal || id_ex_jalr;
 
     // next-PC mux
-    wire [31:0] pc_target   = id_ex_pc + id_ex_imm;      // branch immB / JAL immJ
+    wire [31:0] pc_target   = id_ex_pc + id_ex_imm;      // branch immB
     wire [31:0] jalr_target = {alu_result[31:1], 1'b0};  // rs1 + immI, bit 0 cleared (jalr)
 
-    assign redirect = (jump || take_branch) && id_ex_valid; // need id_ex valid so bubble doesnt count as redirect
-    assign redirect_pc = id_ex_jalr ? jalr_target : pc_target;
+    // jal was taken in ID; here we fix branch mispredicts (either direction) and resolve jalr
+    wire br_mispredict = id_ex_branch && (take_branch != id_ex_b_p);
+    assign redirect    = id_ex_valid && (br_mispredict || id_ex_jalr); // need id_ex valid so bubble doesnt count as redirect
+    assign redirect_pc = id_ex_jalr  ? jalr_target
+                       : take_branch ? pc_target
+                       : id_ex_pc + 32'd4;              // predicted taken, wasn't
+
+    // train on every real conditional branch
+    assign bp_upd_valid = id_ex_valid && id_ex_branch;
+    assign bp_upd_taken = take_branch;
+
 
     //ex_mem allocations:
     always @(posedge clk) begin
         if (rst) begin
             ex_mem_valid <= 1'b0;
         end
-        else if (!clk_en) begin
-            ex_mem_valid <= 1'b0;
-        end
-        else begin
+        else if (clk_en) begin
             ex_mem_valid        <= id_ex_valid;
             ex_mem_pc           <= id_ex_pc;
             ex_mem_instr        <= id_ex_instr;
@@ -421,10 +442,7 @@ module pipelined_datapath #(
         if (rst) begin
             mem_wb_valid        <= 1'b0;
         end
-        else if (!clk_en) begin
-            mem_wb_valid        <= 1'b0;
-        end
-        else begin
+        else if (clk_en) begin
             mem_wb_valid        <= ex_mem_valid;
             mem_wb_pc           <= ex_mem_pc;
             mem_wb_instr        <= ex_mem_instr;
