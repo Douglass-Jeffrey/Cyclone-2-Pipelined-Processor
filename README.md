@@ -326,9 +326,6 @@ inside the chip's spec but hasn't been tried on the board yet.
 | icache, 8 KB | 16 | 1 | — | 17 |
 | **Total** | | | | **52 / 52** |
 
-Every M4K is used, so SignalTap (which needs M4Ks for its sample buffer) only
-fits if a cache is shrunk first.
-
 ### 3.8 Miss costs
 
 | Event | Cycles |
