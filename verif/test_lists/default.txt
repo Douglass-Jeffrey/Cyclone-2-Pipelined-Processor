@@ -19,3 +19,6 @@ bp_loop.S
 bp_jumps.S
 bp_stall_branch.S
 bp_redirect_priority.S
+
+# caches: dirty evictions, merges, a load held across a store's miss, address wrap
+dc_evict.S

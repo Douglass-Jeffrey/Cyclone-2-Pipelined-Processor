@@ -37,6 +37,149 @@
 `define FENCE_OPCODE        7'b0001111
 `define SYSTEM_OPCODE       7'b1110011  //ECALL/EBREAK/xRET + Zicsr, disambiguated by funct3
 
+// Djef fixing instruction defs, more descriptive even though some are redundant
+// might be used later
+//****************************************************************************//
+
+//ARITHMETIC INSTRS
+
+//RTYPE
+//ADD
+`define ADD_OPCODE          7'b011_0011
+`define ADD_FUNCT3          3'b000
+`define ADD_FUNCT7          7'b000_0000
+//SUB
+`define SUB_OPCODE          7'b011_0011
+`define SUB_FUNCT3          3'b000
+`define SUB_FUNCT7          7'b010_0000
+//AND
+`define AND_OPCODE          7'b011_0011
+`define AND_FUNCT3          3'b111
+`define AND_FUNCT7          7'b000_0000
+//OR
+`define OR_OPCODE           7'b011_0011
+`define OR_FUNCT3           3'b110
+`define OR_FUNCT7           7'b000_0000
+//XOR
+`define XOR_OPCODE          7'b011_0011
+`define XOR_FUNCT3          3'b100
+`define XOR_FUNCT7          7'b000_0000
+//SLL
+`define SLL_OPCODE          7'b011_0011
+`define SLL_FUNCT3          3'b001
+`define SLL_FUNCT7          7'b000_0000
+//SRL
+`define SRL_OPCODE          7'b011_0011
+`define SRL_FUNCT3          3'b101
+`define SRL_FUNCT7          7'b000_0000
+//SRA
+`define SRA_OPCODE          7'b011_0011
+`define SRA_FUNCT3          3'b101
+`define SRA_FUNCT7          7'b010_0000
+//SLT
+`define SLT_OPCODE          7'b011_0011
+`define SLT_FUNCT3          3'b010
+`define SLT_FUNCT7          7'b000_0000
+//SLTU
+`define SLTU_OPCODE         7'b011_0011
+`define SLTU_FUNCT3         3'b011
+`define SLTU_FUNCT7         7'b000_0000
+
+//ITYPE
+//ADDI
+`define ADDI_OPCODE         7'b001_0011
+`define ADDI_FUNCT3         3'b000
+//ANDI
+`define ANDI_OPCODE         7'b001_0011
+`define ANDI_FUNCT3         3'b111
+//ORI
+`define ORI_OPCODE          7'b001_0011
+`define ORI_FUNCT3          3'b110
+//XORI
+`define XORI_OPCODE         7'b001_0011
+`define XORI_FUNCT3         3'b100
+//SLTI
+`define SLTI_OPCODE         7'b001_0011
+`define SLTI_FUNCT3         3'b010
+//SLTIU
+`define SLTIU_OPCODE        7'b001_0011
+`define SLTIU_FUNCT3        3'b011
+//SLLI
+`define SLLI_OPCODE         7'b001_0011
+`define SLLI_FUNCT3         3'b001
+`define SLLI_FUNCT7         7'b000_0000
+//SRLI
+`define SRLI_OPCODE         7'b001_0011
+`define SRLI_FUNCT3         3'b101
+`define SRLI_FUNCT7         7'b000_0000
+//SRAI
+`define SRAI_OPCODE         7'b001_0011
+`define SRAI_FUNCT3         3'b101
+`define SRAI_FUNCT7         7'b010_0000
+
+
+//MEMORY INSTRS
+
+//ITYPE
+//LB
+`define LB_OPCODE           7'b000_0011
+`define LB_FUNCT3           3'b000
+//LBU
+`define LBU_OPCODE          7'b000_0011
+`define LBU_FUNCT3          3'b100
+//LH
+`define LH_OPCODE           7'b000_0011
+`define LH_FUNCT3           3'b001
+//LHU
+`define LHU_OPCODE          7'b000_0011
+`define LHU_FUNCT3          3'b101
+//LW
+`define LW_OPCODE           7'b000_0011
+`define LW_FUNCT3           3'b010
+//STYPE
+//SB
+`define SB_OPCODE           7'b010_0011
+`define SB_FUNCT3           3'b000
+//SH
+`define SH_OPCODE           7'b010_0011
+`define SH_FUNCT3           3'b001
+//SW
+`define SW_OPCODE           7'b010_0011
+`define SW_FUNCT3           3'b010
+
+
+//CONTROL INSTRS
+
+//BTYPE
+//BEQ
+`define BEQ_OPCODE          7'b110_0011
+`define BEQ_FUNCT3          3'b000
+//BNE
+`define BNE_OPCODE          7'b110_0011
+`define BNE_FUNCT3          3'b001
+//BLT
+`define BLT_OPCODE          7'b110_0011
+`define BLT_FUNCT3          3'b100
+//BLTU
+`define BLTU_OPCODE         7'b110_0011
+`define BLTU_FUNCT3         3'b110
+//BGE
+`define BGE_OPCODE          7'b110_0011
+`define BGE_FUNCT3          3'b101
+//BGEU
+`define BGEU_OPCODE         7'b110_0011
+`define BGEU_FUNCT3         3'b111
+
+//JTYPE
+//JAL
+`define JAL_OPCODE          7'b110_1111
+
+//ITYPE
+//JALR
+`define JALR_OPCODE         7'b110_0111
+`define JALR_FUNCT3         3'b000
+//****************************************************************************//
+
 //IMM_GEN immediate type select (from decode, based on opcode)
 `define IMM_I               3'd0
 `define IMM_S               3'd1
@@ -60,5 +203,13 @@
 `define FWD_NONE   2'd0   // use the value read from the regfile in ID
 `define FWD_MEM    2'd1   // result of the instruction now in MEM
 `define FWD_WB     2'd2   // result of the instruction now in WB
+
+
+
+//caching
+`define NUM_DCACHE_LANES 3'd4
+
+
+
 
 `endif

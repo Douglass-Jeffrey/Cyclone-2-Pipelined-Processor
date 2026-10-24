@@ -11,8 +11,11 @@ ctl.v
 imm_gen.v
 alu.v
 regfile.v
-imem.v
-dmem.v
+icache.v
+dcache.v
+cache_ram.v
+mem_arbiter.v
+sram_ctl.v
 hazard_unit.v
 forwarding_unit.v
 branch_predictor.v

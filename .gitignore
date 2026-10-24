@@ -2,8 +2,14 @@ quartus/db/
 quartus/incremental_db/
 quartus/.qsys_edit
 quartus/output_files/
+# the same Quartus build output in sub-projects (quartus/sram_test/), and per-user workspace files
+quartus/**/db/
+quartus/**/incremental_db/
+quartus/**/output_files/
+*.qws
 verif/sim.out
 build/
+docs/
 dev/src/WIP/
 verif/tb/WIP/
 quartus/WIP/

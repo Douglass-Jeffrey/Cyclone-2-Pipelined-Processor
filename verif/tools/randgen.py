@@ -10,7 +10,10 @@ What the generator is biased towards, and why:
     exercised constantly instead of rarely;
   * x0 as a source and destination, which forwarding must never treat as real;
   * legal, aligned addresses inside the first 128 bytes of data memory (andi
-    masks), so loads and stores collide with each other often;
+    masks), so loads and stores collide with each other often; half of them
+    are moved by x13, a base that hops between regions 16 KB apart, so they
+    land on the same D-cache lines under different tags and force dirty
+    evictions;
   * forward branches and jumps, plus bounded backward loops counted down in
     x12 (which nothing else writes), so every program still reaches its final
     `j .` and halts.  The loops train the branch predictor taken and then
@@ -26,6 +29,8 @@ SH_OPS = ["slli", "srli", "srai"]
 BR_OPS = ["beq", "bne", "blt", "bge", "bltu", "bgeu"]
 LOADS = {"lw": (0x7C, 4), "lh": (0x7E, 2), "lhu": (0x7E, 2), "lb": (0x7F, 1), "lbu": (0x7F, 1)}
 STORES = {"sw": (0x7C, 4), "sh": (0x7E, 2), "sb": (0x7F, 1)}
+# x13's values: 16 KB apart (the D-cache's size), so they all share cache lines
+BASES = [0x0, 0x4000, 0x8000, 0xC000, 0x20000, 0x3C000]
 
 
 def gen_random(seed, ngroups=120):
@@ -52,6 +57,9 @@ def gen_random(seed, ngroups=120):
     def imm12():
         return rnd.choice([0, 1, -1, 2047, -2048, rnd.randint(-2048, 2047), rnd.randint(-64, 64)])
 
+    def based():
+        return ["add x10, x10, x13"] if rnd.random() < 0.5 else []
+
     def alu():
         d = dst(); s1 = src(); s2 = src(); wrote(d)
         return "%s x%d, x%d, x%d" % (rnd.choice(R_OPS), d, s1, s2)
@@ -59,7 +67,10 @@ def gen_random(seed, ngroups=120):
     groups = []          # each: dict(lines=[...], target=None|index)
     for i in range(ngroups):
         k = rnd.random()
-        if k < 0.24:
+        if k < 0.02:
+            g = ["lui x13, %d" % (rnd.choice(BASES) >> 12)]
+            groups.append(dict(lines=g))
+        elif k < 0.24:
             d = dst(); s1 = src(); s2 = src()
             g = ["%s x%d, x%d, x%d" % (rnd.choice(R_OPS), d, s1, s2)]; wrote(d)
             groups.append(dict(lines=g))
@@ -87,16 +98,16 @@ def gen_random(seed, ngroups=120):
             op = rnd.choice(list(LOADS)); mask, al = LOADS[op]
             d = dst()
             off = rnd.randrange(0, 124, al)
-            g = ["andi x10, x%d, %d" % (src(), mask), "%s x%d, %d(x10)" % (op, d, off)]; wrote(d)
+            g = ["andi x10, x%d, %d" % (src(), mask)] + based() + ["%s x%d, %d(x10)" % (op, d, off)]; wrote(d)
             groups.append(dict(lines=g))
         elif k < 0.76:
             op = rnd.choice(list(STORES)); mask, al = STORES[op]
             off = rnd.randrange(0, 124, al)
-            g = ["andi x10, x%d, %d" % (src(), mask), "%s x%d, %d(x10)" % (op, src(), off)]
+            g = ["andi x10, x%d, %d" % (src(), mask)] + based() + ["%s x%d, %d(x10)" % (op, src(), off)]
             groups.append(dict(lines=g))
         elif k < 0.78:
             d = dst(); off = rnd.randrange(0, 124, 4)
-            g = ["andi x10, x%d, 124" % src(), "sw x%d, %d(x10)" % (src(), off),
+            g = ["andi x10, x%d, 124" % src()] + based() + ["sw x%d, %d(x10)" % (src(), off),
                  "lw x%d, %d(x10)" % (d, off)]; wrote(d)
             groups.append(dict(lines=g))
         elif k < 0.83:
@@ -129,7 +140,7 @@ def gen_random(seed, ngroups=120):
             wrote(d)
             groups.append(dict(lines=g))
 
-    out = ["    .globl _start", "_start:"]
+    out = ["    .globl _start", "_start:", "    li x13, %d" % rnd.choice(BASES)]
     for r in regs:
         out.append("    li x%d, %d" % (r, rnd.randint(-2**31, 2**31 - 1)))
     for i, g in enumerate(groups):

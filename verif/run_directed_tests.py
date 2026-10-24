@@ -7,6 +7,7 @@
     python verif/run_directed_tests.py --name fix_fwd         choose the build folder's name
     python verif/run_directed_tests.py --clken half           clk_en low every other cycle
     python verif/run_directed_tests.py --clken rand --seed 7  random clk_en pattern 7
+    python verif/run_directed_tests.py --icache cold          every fetch starts as an I-cache miss
 
 A test list has one file name per line, exactly as it appears in
 verif/test_scripts/ (e.g. t2_load_use.S), so names can be pasted straight in;
@@ -19,8 +20,9 @@ reference model and the RTL so the model is not taken on trust:
     # EXPECT flushes = 2    exact number of front-end flushes: branch mispredicts
     #                       plus jalr (RTL only)
 
-Stall and flush counts are taken on enabled cycles only, so every test must
-pass unchanged under every --clken mode.
+Stall and flush counts are taken on edges where the pipeline moves, so every
+test must pass unchanged under every --clken mode.  --icache cold skips them:
+waiting on instruction misses legitimately moves both.
 
 Output: build/<run>/<test>/  program.hex .elf .bin, trace.txt, dump.txt
 <test> is the file name without its extension (t2_load_use.S -> t2_load_use/).
@@ -96,6 +98,8 @@ def main(argv=None):
     ap.add_argument("--clken", choices=harness.CLKEN_MODES, default="full",
                     help="clk_en pattern in tb_pipeline.v (default: full)")
     ap.add_argument("--seed", type=int, default=1, help="seed for --clken rand (default: 1)")
+    ap.add_argument("--icache", choices=harness.ICACHE_MODES, default="warm",
+                    help="warm: program preloaded in the I-cache (default); cold: fetched from SRAM")
     args = ap.parse_args(argv)
 
     # decide what to run before creating anything, so a typo leaves no empty folder
@@ -119,7 +123,7 @@ def main(argv=None):
         words = rvsim.assemble(src, folder + "/program.hex")
         values, stalls, flushes = parse_expect(src)
         failures += harness.report(name, *harness.check_against_ref(
-            vvp, words, folder, values, stalls, flushes, args.clken, args.seed))
+            vvp, words, folder, values, stalls, flushes, args.clken, args.seed, args.icache))
 
     return harness.finish(failures, run_dir)
 

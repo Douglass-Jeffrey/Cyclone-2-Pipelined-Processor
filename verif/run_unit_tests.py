@@ -5,8 +5,9 @@
     python verif/run_unit_tests.py --name bp_fix    choose the build folder's name
     python verif/run_unit_tests.py --dev DIR        test another copy of the design
 
-Each testbench is compiled with every file in dev/rtl_sources.txt and itself
-as the only top level (iverilog -s), so it always tests the same module the
+Each testbench is compiled with every file in dev/rtl_sources.txt, plus the
+extra files UNIT_TBS lists for it (retired modules, the SRAM model), and itself as
+the only top level (iverilog -s), so it always tests the same module the
 pipeline uses.  A testbench passes if it compiles, runs, prints "PASSED" and
 prints no line starting with FAIL.
 
@@ -23,12 +24,16 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/tools")
 import harness
 
-# testbenches for modules in dev/rtl_sources.txt, relative to verif/tb/;
-# each file's module is named after the file
+# (testbench relative to verif/tb/, files it needs beyond dev/rtl_sources.txt,
+# relative to the project); each testbench's module is named after its file
+SRAM_FILES = ["verif/tb/sram_model.v"]
 UNIT_TBS = [
-    "tb_branch_predictor.v",
-    "WIP/tb_imem.v",
-    "WIP/tb_dmem.v",
+    ("tb_branch_predictor.v", []),
+    ("tb_imem.v",             ["dev/src/imem.v"]),     # imem/dmem: retired by the caches
+    ("tb_dmem.v",             ["dev/src/dmem.v"]),
+    ("tb_sram_ctl.v",         SRAM_FILES),
+    ("tb_sram_memtest.v",     ["quartus/sram_test/sram_memtest.v"] + SRAM_FILES),
+    ("tb_dcache.v",           SRAM_FILES),     # ~45 s: 50,000 random accesses
 ]
 
 
@@ -40,13 +45,14 @@ def main(argv=None):
 
     run_dir = harness.new_run_dir("unit", args.name)
     failures = 0
-    for rel in UNIT_TBS:
+    for rel, extra in UNIT_TBS:
         top = os.path.splitext(os.path.basename(rel))[0]
         folder = run_dir + "/" + top
         os.makedirs(folder)
         vvp = folder + "/" + top + ".vvp"
 
-        r = harness.compile_tb(args.dev, vvp, harness.TB_DIR + "/" + rel, top)
+        r = harness.compile_tb(args.dev, vvp, harness.TB_DIR + "/" + rel, top,
+                               [harness.PROJECT + "/" + f for f in extra])
         out = r.stdout + r.stderr
         if r.returncode == 0:
             r = subprocess.run(["vvp", vvp], cwd=folder, capture_output=True, text=True)

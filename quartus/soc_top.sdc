@@ -28,3 +28,10 @@ set_false_path -from * -to [get_ports {LEDR[*] LEDG[*] HEX0[*] HEX1[*] HEX2[*] H
 # 25 MHz sign-off: uncomment to give paths out of the CPU two CLOCK_50 periods (40 ns)
 # set_multicycle_path -setup -end 2 -from [get_registers {*u_cpu|*}]
 # set_multicycle_path -hold  -end 1 -from [get_registers {*u_cpu|*}]
+
+# The SRAM is asynchronous: sram_ctl times it with whole clock cycles (address
+# and data settle a cycle before WE_N falls and hold a cycle after it rises;
+# reads sample 3 cycles after the address), and every pin comes straight from
+# an I/O-cell register.  There is no single-cycle path to check.
+set_false_path -to   [get_ports {SRAM_*}]
+set_false_path -from [get_ports {SRAM_DQ[*]}]

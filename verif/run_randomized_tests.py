@@ -6,6 +6,7 @@
     python verif/run_randomized_tests.py --seed 17        just program 17, with full output
     python verif/run_randomized_tests.py --name fix_fwd   choose the build folder's name
     python verif/run_randomized_tests.py --clken rand     random clk_en pattern too
+    python verif/run_randomized_tests.py --icache cold    programs fetched from SRAM through misses
 
 Programs come from verif/tools/randgen.py.  The same seed always produces the
 same program (and, with --clken rand, the same clk_en pattern), so a failure
@@ -34,6 +35,8 @@ def main(argv=None):
     ap.add_argument("--dev", default=harness.DEV_DIR, help="design folder to test")
     ap.add_argument("--clken", choices=harness.CLKEN_MODES, default="full",
                     help="clk_en pattern in tb_pipeline.v (default: full)")
+    ap.add_argument("--icache", choices=harness.ICACHE_MODES, default="warm",
+                    help="warm: program preloaded in the I-cache (default); cold: fetched from SRAM")
     args = ap.parse_args(argv)
 
     seeds = [args.seed] if args.seed is not None else list(range(args.count))
@@ -49,7 +52,8 @@ def main(argv=None):
         open(src, "w").write(gen_random(s))
         words = rvsim.assemble(src, folder + "/program.hex")
         errors, n, stalls, flushes = harness.check_against_ref(vvp, words, folder,
-                                                               clken=args.clken, seed=s)
+                                                               clken=args.clken, seed=s,
+                                                               icache=args.icache)
         if errors or args.seed is not None:
             failures += harness.report("%s  [%s]" % (name, src), errors, n, stalls, flushes)
         elif s % 50 == 0:

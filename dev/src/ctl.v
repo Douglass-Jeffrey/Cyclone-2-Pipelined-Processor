@@ -63,12 +63,12 @@ module ctl (
                 uses_rs1    = 1'b1;
                 uses_rs2    = 1'b1;
                 case (funct3)
-                    3'b000: alu_op = `ALU_SUB;   // beq check zero
-                    3'b001: alu_op = `ALU_SUB;   // bne check !zero
-                    3'b100: alu_op = `ALU_SLT;   // blt check result==1
-                    3'b101: alu_op = `ALU_SLT;   // bge check result==0
-                    3'b110: alu_op = `ALU_SLTU;  // bltu
-                    3'b111: alu_op = `ALU_SLTU;  // bgeu
+                    `BEQ_FUNCT3: alu_op = `ALU_SUB;   // beq check zero
+                    `BNE_FUNCT3: alu_op = `ALU_SUB;   // bne check !zero
+                    `BLT_FUNCT3: alu_op = `ALU_SLT;   // blt check result==1
+                    `BGE_FUNCT3: alu_op = `ALU_SLT;   // bge check result==0
+                    `BLTU_FUNCT3: alu_op = `ALU_SLTU;  // bltu
+                    `BGEU_FUNCT3: alu_op = `ALU_SLTU;  // bgeu
                     default: alu_op = `ALU_SUB;
                 endcase
             end
@@ -94,15 +94,15 @@ module ctl (
                 uses_rs1    = 1'b1;
                 uses_rs2    = 1'b1;
                 case (funct3)
-                    3'b000: alu_op = (is_rtype && funct7b5) ? `ALU_SUB : `ALU_ADD;
-                    3'b001: alu_op = `ALU_SLL;
-                    3'b010: alu_op = `ALU_SLT;
-                    3'b011: alu_op = `ALU_SLTU;
-                    3'b100: alu_op = `ALU_XOR;
-                    3'b101: alu_op = funct7b5 ? `ALU_SRA : `ALU_SRL;
-                    3'b110: alu_op = `ALU_OR;
-                    3'b111: alu_op = `ALU_AND;
-                    default: alu_op = `ALU_ADD;
+                    `ADD_FUNCT3:    alu_op = (is_rtype && funct7b5) ? `ALU_SUB : `ALU_ADD;
+                    `SLL_FUNCT3:    alu_op = `ALU_SLL;
+                    `SLT_FUNCT3:    alu_op = `ALU_SLT;
+                    `SLTU_FUNCT3:   alu_op = `ALU_SLTU;
+                    `XOR_FUNCT3:    alu_op = `ALU_XOR;
+                    `SRA_FUNCT3:    alu_op = funct7b5 ? `ALU_SRA : `ALU_SRL;
+                    `OR_FUNCT3:     alu_op = `ALU_OR;
+                    `AND_FUNCT3:    alu_op = `ALU_AND;
+                    default:        alu_op = `ALU_ADD;
                 endcase
             end
             // imm and rtype have same funct3 values for cmds
@@ -112,15 +112,15 @@ module ctl (
                 imm_type    = `IMM_I;
                 uses_rs1    = 1'b1;
                 case (funct3)
-                    3'b000: alu_op = (is_rtype && funct7b5) ? `ALU_SUB : `ALU_ADD;
-                    3'b001: alu_op = `ALU_SLL;
-                    3'b010: alu_op = `ALU_SLT;
-                    3'b011: alu_op = `ALU_SLTU;
-                    3'b100: alu_op = `ALU_XOR;
-                    3'b101: alu_op = funct7b5 ? `ALU_SRA : `ALU_SRL;
-                    3'b110: alu_op = `ALU_OR;
-                    3'b111: alu_op = `ALU_AND;
-                    default: alu_op = `ALU_ADD;
+                    `ADDI_FUNCT3:   alu_op = (is_rtype && funct7b5) ? `ALU_SUB : `ALU_ADD;
+                    `SLLI_FUNCT3:   alu_op = `ALU_SLL;
+                    `SLTI_FUNCT3:   alu_op = `ALU_SLT;
+                    `SLTIU_FUNCT3:  alu_op = `ALU_SLTU;
+                    `XORI_FUNCT3:   alu_op = `ALU_XOR;
+                    `SRAI_FUNCT3:   alu_op = funct7b5 ? `ALU_SRA : `ALU_SRL;
+                    `ORI_FUNCT3:    alu_op = `ALU_OR;
+                    `ANDI_FUNCT3:   alu_op = `ALU_AND;
+                    default:        alu_op = `ALU_ADD;
                 endcase
             end
             `JAL_OPCODE: begin

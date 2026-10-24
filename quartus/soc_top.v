@@ -6,7 +6,12 @@
 // Clocking
 //   cpu_clk_en is muxed from CLOCK_50 by SW[9:8], latched on reset:
 //     11: 50 MHz   10: 25 MHz   01: ~1.5 Hz   00: one cycle per KEY1 press
-//   50 MHz fails timing (Fmax ~46 MHz), 25 MHz is the fastest legal rate.
+//   50 MHz meets timing (Fmax ~52 MHz with the caches).  Cache misses are
+//   served at the full 50 MHz in every mode.
+//
+// Display
+//   SW3:0 picks one of the 16 readout words (the JTAG selector, see readout())
+//   for HEX3..0 and the LEDs; SW4=1 shows its upper half.
 //
 // Reset
 //   The core resets SYNCHRONOUSLY, so it only notices reset on a rising CLOCK_50
@@ -23,7 +28,15 @@ module soc_top (
     output wire [6:0]  HEX0,       // 7-segm displays, active-LOW segments
     output wire [6:0]  HEX1,       // segment order: bit0=a, bit1=b, ... bit6=g
     output wire [6:0]  HEX2,
-    output wire [6:0]  HEX3
+    output wire [6:0]  HEX3,
+    // 512 KB SRAM: main memory behind the caches
+    output wire [17:0] SRAM_ADDR,
+    inout  wire [15:0] SRAM_DQ,
+    output wire        SRAM_CE_N,
+    output wire        SRAM_OE_N,
+    output wire        SRAM_WE_N,
+    output wire        SRAM_UB_N,
+    output wire        SRAM_LB_N
 );
 
     // power on rst request
@@ -90,10 +103,14 @@ module soc_top (
     // instantiate the cpu
     wire [31:0] dbg_pc, dbg_instr, dbg_wb_data, dbg_if_pc;
     wire        dbg_reg_write, dbg_retire_valid, dbg_stall, dbg_redirect;
+    wire        mem_ready, dbg_dmiss, dbg_dwriteback, dbg_imiss;
 
+    // program.hex preloads the I-cache; the data region of the SRAM is zeroed
+    // after every reset (~12 ms) so memory starts as the reference model's does
     pipelined_datapath #(
-        .RESET_PC  (32'h0000_0000),
-        .IMEM_INIT ("program.hex")
+        .RESET_PC   (32'h0000_0000),
+        .IMEM_INIT  ("program.hex"),
+        .CLEAR_SRAM (1)
     ) u_cpu (
         .clk              (CLOCK_50),
         .rst              (rst),
@@ -105,7 +122,18 @@ module soc_top (
         .dbg_if_pc        (dbg_if_pc),
         .dbg_retire_valid (dbg_retire_valid),
         .dbg_stall        (dbg_stall),
-        .dbg_redirect     (dbg_redirect)
+        .dbg_redirect     (dbg_redirect),
+        .dbg_mem_ready    (mem_ready),
+        .dbg_dmiss        (dbg_dmiss),
+        .dbg_dwriteback   (dbg_dwriteback),
+        .dbg_imiss        (dbg_imiss),
+        .SRAM_ADDR        (SRAM_ADDR),
+        .SRAM_DQ          (SRAM_DQ),
+        .SRAM_CE_N        (SRAM_CE_N),
+        .SRAM_OE_N        (SRAM_OE_N),
+        .SRAM_WE_N        (SRAM_WE_N),
+        .SRAM_UB_N        (SRAM_UB_N),
+        .SRAM_LB_N        (SRAM_LB_N)
     );
 
     // Detect halts
@@ -124,22 +152,39 @@ module soc_top (
     // Debug counters
     // Frozen by `halted` so the final reading is stable for the probes.  The
     // halting `j .` itself is counted, which matches the reference model's
-    // trace, so RTL and model instruction counts line up exactly.
+    // trace, so RTL and model instruction counts line up exactly.  Cycles
+    // start once the reset sweep is done and include time waiting on misses.
     reg [31:0] cyc     = 32'd0;
     reg [31:0] retired = 32'd0;
     reg [31:0] stalls  = 32'd0;
     reg [31:0] flushes = 32'd0;
+    reg [31:0] dmisses = 32'd0;
+    reg [31:0] dwbacks = 32'd0;
+    reg [31:0] imisses = 32'd0;
     always @(posedge CLOCK_50 or posedge rst) begin
         if (rst) begin
             cyc     <= 32'd0;
             retired <= 32'd0;
             stalls  <= 32'd0;
             flushes <= 32'd0;
-        end else if (cpu_clk_en && !halted_r) begin
+        end else if (cpu_clk_en && !halted_r && mem_ready) begin
             cyc <= cyc + 32'd1;
             if (dbg_retire_valid) retired <= retired + 32'd1;
             if (dbg_stall)        stalls  <= stalls  + 32'd1;
             if (dbg_redirect)     flushes <= flushes + 32'd1;
+        end
+    end
+
+    // miss events come from the memory side, which runs on every CLOCK_50 edge
+    always @(posedge CLOCK_50 or posedge rst) begin
+        if (rst) begin
+            dmisses <= 32'd0;
+            dwbacks <= 32'd0;
+            imisses <= 32'd0;
+        end else if (!halted_r) begin
+            if (dbg_dmiss)      dmisses <= dmisses + 32'd1;
+            if (dbg_dwriteback) dwbacks <= dwbacks + 32'd1;
+            if (dbg_imiss)      imisses <= imisses + 32'd1;
         end
     end
 
@@ -166,7 +211,12 @@ module soc_top (
 
     // 0xA5 magic lets a host script confirm it is talking to this design;
     // bumping the version byte flags a stale .sof.
-    wire [31:0] status = {8'hA5, 8'd1, 13'd0, speed, halted_r};
+    // The low byte carries the core's 1-bit debug outputs, so on the board
+    // (SW3:0 = 1000) each one lights its own green LED:
+    //   0 halted  2:1 speed  3 mem_ready  4 reg_write  5 retire_valid
+    //   6 stall  7 redirect.  The last three only pulse while the CPU runs.
+    wire [31:0] status = {8'hA5, 8'd3, 8'd0, dbg_redirect, dbg_stall, dbg_retire_valid,
+                          dbg_reg_write, mem_ready, speed, halted_r};
 
     // ---- readout mux -------------------------------------------------------
     // One mux feeds both the 7-segment display and the JTAG probe, so what a
@@ -188,35 +238,15 @@ module soc_top (
                 4'd10: readout = dbg_instr;
                 4'd11: readout = dbg_if_pc;
                 4'd12: readout = dbg_wb_data;
-                default: readout = 32'd0;
+                4'd13: readout = dmisses;       // D-cache line fills
+                4'd14: readout = dwbacks;       // dirty lines written back
+                default: readout = imisses;     // 15: I-cache line fills
             endcase
         end
     endfunction
 
-    // Board display: SW1 picks the bank, SW7:5 the entry within it.
-    //   SW1=0  live pipeline state      SW1=1  benchmark counters and results
-    // SW1=0 keeps the meanings the existing board notes document, so nothing
-    // already written down about SW7:5 changes.
-    reg [3:0] sel_r;
-    always @(*) begin
-        if (SW[1]) begin
-            sel_r = {1'b0, SW[7:5]};          // 0 cyc 1 retired 2 stalls 3 flushes
-                                              // 4..7 result0..3
-        end else begin
-            case (SW[7:5])
-                3'd0: sel_r = 4'd9;           // retiring pc
-                3'd1: sel_r = 4'd10;          // retiring instruction
-                3'd2: sel_r = 4'd12;          // write-back data
-                3'd3: sel_r = 4'd11;          // pc in ID (front end)
-                3'd4: sel_r = 4'd0;           // cycles
-                3'd5: sel_r = 4'd1;           // retired
-                3'd6: sel_r = 4'd2;           // stalls
-                default: sel_r = 4'd3;        // flushes
-            endcase
-        end
-    end
-
-    wire [31:0] disp_val = readout(sel_r);
+    // Board display: SW3:0 is the word number, the same one JTAG uses
+    wire [31:0] disp_val = readout(SW[3:0]);
 
     // leds, if sw4 high show upper 18 bits of disp_val, else lower 18 bits
     wire [17:0] window = SW[4] ? disp_val[31:14] : disp_val[17:0];
@@ -230,30 +260,34 @@ module soc_top (
     assign HEX2 = seg7(hex_val[11:8]);
     assign HEX3 = seg7(hex_val[15:12]);
 
-    // JTAG readout disabled for now
-    // // ---- JTAG readout ------------------------------------------------------
-    // // In-System Sources and Probes: the host writes a 4-bit selector through
-    // // `source` and reads the selected 32-bit word back through `probe`, over
-    // // the same USB-Blaster cable used to program the board.  No pins, no UART.
-    // // Read AFTER halt: the counters are frozen then, so a value cannot tear
-    // // across the asynchronous JTAG read.
-    // wire [3:0] probe_sel;
+    // ---- JTAG readout ------------------------------------------------------
+    // In-System Sources and Probes: the host writes a 4-bit selector through
+    // `source` and reads the selected 32-bit word back through `probe`, over
+    // the same USB-Blaster cable used to program the board.  No pins, no UART.
+    // Read AFTER halt: the counters are frozen then, so a value cannot tear
+    // across the asynchronous JTAG read.  Host side: quartus/read_results.tcl
+    wire [3:0] probe_sel;
 
-    // altsource_probe #(
-    //     .sld_auto_instance_index ("YES"),
-    //     .sld_instance_index      (0),
-    //     .instance_id             ("BNCH"),
-    //     .probe_width             (32),
-    //     .source_width            (4),
-    //     .source_initial_value    ("0"),
-    //     .enable_metastability    ("NO"),
-    //     .lpm_type                ("altsource_probe")
-    // ) u_isp (
-    //     .probe      (readout(probe_sel)),
-    //     .source     (probe_sel),
-    //     .source_clk (CLOCK_50),
-    //     .source_ena (1'b1)
-    // );
+`ifndef __ICARUS__
+    // Altera-only JTAG node; iverilog simulations of this wrapper skip it
+    altsource_probe #(
+        .sld_auto_instance_index ("YES"),
+        .sld_instance_index      (0),
+        .instance_id             ("BNCH"),
+        .probe_width             (32),
+        .source_width            (4),
+        .source_initial_value    ("0"),
+        .enable_metastability    ("NO"),
+        .lpm_type                ("altsource_probe")
+    ) u_isp (
+        .probe      (readout(probe_sel)),
+        .source     (probe_sel),
+        .source_clk (CLOCK_50),
+        .source_ena (1'b1)
+    );
+`else
+    assign probe_sel = 4'd0;
+`endif
 
     // 7-segment decoder, active-low segments
     function [6:0] seg7;

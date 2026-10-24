@@ -8,13 +8,11 @@ module imem #(
     input  wire        clk,
     input  wire        clk_en,
     input  wire [31:0] addr,    // byte address (PC), addr[1:0] assumed 0
-    output wire [31:0] instr
+    output reg  [31:0] instr
 );
     localparam AW = $clog2(DEPTH_WORDS);
 
-    // Pragma to help quartus infer not to use LU's 
-    (* ramstyle = "M4K" *) reg [31:0] mem [0:DEPTH_WORDS-1];
-    reg [31:0] addr_reg; 
+    (* ramstyle = "M4K", romstyle = "M4K" *) reg [31:0] mem [0:DEPTH_WORDS-1];
 
     integer i;
     initial begin
@@ -23,11 +21,11 @@ module imem #(
         if (INIT_FILE != "") $readmemh(INIT_FILE, mem);
     end
 
+    // read on the clock edge (the M4K ROM template): the block's own address
+    // register gives the one-cycle latency, and clk_en low holds instr
     always @(posedge clk) begin
         if (clk_en) begin
-            addr_reg <= addr;
+            instr <= mem[addr[AW+1:2]];
         end
     end
-
-    assign instr = mem[addr_reg[AW+1:2]];
 endmodule

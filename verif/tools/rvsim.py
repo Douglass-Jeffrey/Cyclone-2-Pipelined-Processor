@@ -7,8 +7,9 @@ import struct
 import subprocess
 
 M32 = 0xFFFFFFFF
-DMEM_WORDS = 256
-IMEM_WORDS = 512
+# the SRAM's code and data regions, 256 KB each; addresses wrap within them as in the RTL
+DMEM_WORDS = 65536
+IMEM_WORDS = 65536
 
 GCC = "riscv-none-elf-gcc"
 OBJCOPY = "riscv-none-elf-objcopy"

@@ -30,12 +30,17 @@ TEST_LISTS   = PROJECT + "/verif/test_lists"
 # the testbenches
 TB_DIR       = PROJECT + "/verif/tb"
 TB_PIPELINE  = TB_DIR + "/tb_pipeline.v"
+SRAM_MODEL   = TB_DIR + "/sram_model.v"     # the board SRAM, behind the caches
 
 # one sub-folder per run
 BUILD_ROOT   = PROJECT + "/build"
 
 # tb_pipeline.v's +clken patterns; results must not depend on which one runs
 CLKEN_MODES  = ("full", "half", "rand")
+
+# tb_pipeline.v's +icache modes: warm (program preloaded, as on the board) or
+# cold (every line fetched from the SRAM model through a miss)
+ICACHE_MODES = ("warm", "cold")
 
 
 # Make a new build/<name>/ for this run; never reuse or overwrite an old one
@@ -51,18 +56,19 @@ def new_run_dir(kind, name=None):
     return run_dir
 
 
-# Compile a testbench against every RTL file; top (iverilog -s) picks the one
+# Compile a testbench against every RTL file, plus `extra` files outside the
+# design (WIP modules, simulation models); top (iverilog -s) picks the one
 # root module, so the design's own top is not elaborated alongside a unit test
-def compile_tb(dev_dir, vvp, tb, top=None):
+def compile_tb(dev_dir, vvp, tb, top=None, extra=()):
     cmd = ["iverilog", "-g2005", "-I", dev_dir, "-o", vvp] + (["-s", top] if top else []) + \
-          [tb] + rtl_sources(dev_dir)
+          [tb] + rtl_sources(dev_dir) + list(extra)
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
 # Compile TB and DUT once, use same built pair for each test
 def build_rtl(dev_dir, run_dir):
     vvp = run_dir + "/tb_pipeline.vvp"
-    r = compile_tb(dev_dir, vvp, TB_PIPELINE)
+    r = compile_tb(dev_dir, vvp, TB_PIPELINE, extra=[SRAM_MODEL])
     if r.returncode != 0:
         print(r.stdout + r.stderr)
         sys.exit("RTL failed to compile")
@@ -70,13 +76,14 @@ def build_rtl(dev_dir, run_dir):
 
 
 # Run compiled TB in test_folder
-def run_rtl(vvp, test_folder, cycles, clken="full", seed=1):
+def run_rtl(vvp, test_folder, cycles, clken="full", seed=1, icache="warm"):
     """Run the compiled testbench INSIDE test_folder.
 
     tb_pipeline.v reads program.hex and writes trace.txt / dump.txt there by
     fixed name, so no path is ever passed into the simulation.
     """
-    r = subprocess.run(["vvp", vvp, "+cycles=%d" % cycles, "+clken=%s" % clken, "+seed=%d" % seed],
+    r = subprocess.run(["vvp", vvp, "+cycles=%d" % cycles, "+clken=%s" % clken, "+seed=%d" % seed,
+                        "+icache=%s" % icache],
                        cwd=test_folder, capture_output=True, text=True)
     trace = test_folder + "/trace.txt"
     dump = test_folder + "/dump.txt"
@@ -88,7 +95,7 @@ def run_rtl(vvp, test_folder, cycles, clken="full", seed=1):
     counts = {k: int(v) for k, v in re.findall(r"(stalls|flushes)=(\d+)", r.stdout)}
     stalls, flushes = counts.get("stalls", -1), counts.get("flushes", -1)
     rtl_trace = [l.strip() for l in open(trace) if l.strip()]
-    regs, mem = {}, {}
+    regs, mem = {}, {}          # dump.txt lists only nonzero memory words
     for l in open(dump):
         k, v = l.split()
         (regs if k[0] == "x" else mem)[int(k[1:])] = int(v, 16)
@@ -97,13 +104,18 @@ def run_rtl(vvp, test_folder, cycles, clken="full", seed=1):
 
 # ---- checking one program --------------------------------------------------
 def check_against_ref(vvp, words, test_folder, expect=None, expect_stalls=None,
-                      expect_flushes=None, clken="full", seed=1):
-    """Run a program on the RTL and the model; return (errors, n_instr, stalls, flushes)."""
+                      expect_flushes=None, clken="full", seed=1, icache="warm"):
+    """Run a program on the RTL and the model; return (errors, n_instr, stalls, flushes).
+
+    With icache="cold" the front end waits on instruction misses, which can
+    move load-use stalls and branch-predictor training, so exact stall and
+    flush counts are only checked warm.
+    """
     ref = rvsim.Ref(words)
     ref.run()
     ref_trace = rvsim.trace_lines(ref.trace)
     cycles = 3 * len(ref_trace) + 60          # enabled cycles; generous: CPI stays well under 3
-    rtl_trace, regs, mem, stalls, flushes = run_rtl(vvp, test_folder, cycles, clken, seed)
+    rtl_trace, regs, mem, stalls, flushes = run_rtl(vvp, test_folder, cycles, clken, seed, icache)
     errors = []
 
     # 1. did it retire everything?
@@ -130,14 +142,15 @@ def check_against_ref(vvp, words, test_folder, expect=None, expect_stalls=None,
     for i in range(32):
         if regs.get(i) != ref.x[i]:
             errors.append("x%d: ref=%08x rtl=%08x" % (i, ref.x[i], regs.get(i, 0)))
-    for i in range(rvsim.DMEM_WORDS):
-        if mem.get(i) != ref.dmem[i]:
+    used = sorted(set(mem) | {i for i, v in enumerate(ref.dmem) if v})
+    for i in used:
+        if mem.get(i, 0) != ref.dmem[i]:
             errors.append("mem[%d]: ref=%08x rtl=%08x" % (i, ref.dmem[i], mem.get(i, 0)))
 
     # 5. hand-written values, checked against the model as well as the RTL
     for kind, idx, val in (expect or []):
         model = ref.x[idx] if kind == "x" else ref.dmem[idx]
-        rtl = regs.get(idx) if kind == "x" else mem.get(idx)
+        rtl = regs.get(idx) if kind == "x" else mem.get(idx, 0)
         if model != val:
             errors.append("EXPECT %s%d=%08x but the reference model has %08x (model bug?)"
                           % (kind, idx, val, model))
@@ -146,6 +159,8 @@ def check_against_ref(vvp, words, test_folder, expect=None, expect_stalls=None,
 
     # 6. exact stall count -- a pipeline that stalls needlessly still computes
     #    the right answers, so only this check can catch it
+    if icache == "cold":
+        expect_stalls = expect_flushes = None
     if expect_stalls is not None and stalls != expect_stalls:
         errors.append("EXPECT stalls = %d but the RTL stalled %d cycle(s)"
                       % (expect_stalls, stalls))

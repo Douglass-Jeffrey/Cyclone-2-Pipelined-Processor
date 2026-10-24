@@ -12,7 +12,7 @@
 #                     the one case that costs a bubble
 #   bne                taken every iteration -> a squash every time round
 #
-# x10 counts completed iterations, so with SW7:5=010 (write-back data) you can
+# x10 counts completed iterations, so with SW3:0=1100 (write-back data) you can
 # watch it climb.  Fibonacci overflows 32 bits after ~47 iterations and simply
 # wraps; that is expected and harmless.
     .globl _start

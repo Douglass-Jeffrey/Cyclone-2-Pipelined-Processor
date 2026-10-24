@@ -98,7 +98,7 @@ module dmem #(
     always @(posedge clk) begin
         if (clk_en && we) begin
             if (st_be[0]) mem0[widx] <= st_wdata[7:0];
-            if (st_be[1]) mem1[widx] <= st_wdata[15:8];        
+            if (st_be[1]) mem1[widx] <= st_wdata[15:8];
             if (st_be[2]) mem2[widx] <= st_wdata[23:16];
             if (st_be[3]) mem3[widx] <= st_wdata[31:24];
         end
