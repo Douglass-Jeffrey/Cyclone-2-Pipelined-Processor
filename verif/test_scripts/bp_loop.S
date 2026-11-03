@@ -6,7 +6,13 @@
 # middle three are predicted, and the final not-taken exit mispredicts.  The
 # exit's wrong path is the loop top, which must be squashed.
 #
+# corr, gshare, local, tournament (BP_HIST_BITS 4, BP_LHIST_BITS 8): the
+# history picks the counter, and each taken bne sees a new one (0000, 0001,
+# 0011, 0111), so all four miss.  The exit reads the untrained 1111 counter,
+# weakly not-taken, so it is right.
+#
 # EXPECT flushes = 2
+# EXPECT flushes[corr,gshare,local,tournament] = 4
 # EXPECT x1 = 15
 # EXPECT x2 = 0
 # EXPECT x3 = 99

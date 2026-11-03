@@ -1,7 +1,7 @@
 # Pipelined RV32I Processor on the Cyclone II (DE1)
 
 A 5-stage pipelined RV32I datapath with forwarding, a load-use interlock, a
-2-bit branch predictor, and an 8 KB instruction cache + 16 KB data cache in
+branch predictor (bimodal, correlating, gshare, local or tournament), and an 8 KB instruction cache + 16 KB data cache in
 front of the board's 512 KB SRAM. It runs at 50 MHz on the Altera Cyclone II
 FPGA Starter Development Board (DE1, EP2C20F484C7) and is checked against a
 Python reference model by directed, random and unit testbenches.
@@ -10,7 +10,7 @@ Python reference model by directed, random and unit testbenches.
 |---|---|
 | ISA | RV32I (no CSRs, traps or interrupts) |
 | Pipeline | IF, ID, EX, MEM, WB, in order |
-| Clock | 50 MHz board oscillator; Fmax ~52–54 MHz depending on placement |
+| Clock | 50 MHz board oscillator; Fmax ~51–54 MHz depending on `BP_TYPE` and placement |
 | Caches | 8 KB icache + 16 KB dcache, direct mapped, 16 B lines, all 52 M4Ks |
 | Main mem | On-board IS61LV25616 SRAM, 256K x 16 (512 KB) |
 | Resources | ~6,300 / 18,752 LEs, 52 / 52 M4Ks |
@@ -18,52 +18,7 @@ Python reference model by directed, random and unit testbenches.
 
 ---
 
-## 1. Repository layout
-
-```
-Pipelined_processor/
-├── dev/
-│   ├── defines.vh            opcodes, ALU codes, mux select codes
-│   ├── rtl_sources.txt       the RTL file list (read by the test runners and bench.py)
-│   └── src/
-│       ├── pipeline.v        the datapath; also hooks up the caches, arbiter and sram_ctl
-│       ├── ctl.v             main decode and control
-│       ├── imm_gen.v         immediate generator
-│       ├── alu.v
-│       ├── regfile.v         32 x 32, write-through
-│       ├── hazard_unit.v     load-use interlock
-│       ├── forwarding_unit.v MEM/WB -> EX forwarding
-│       ├── branch_predictor.v 2-bit counters, predicts in ID
-│       ├── icache.v          8 KB instr cache
-│       ├── dcache.v          16 KB data cache
-│       ├── cache_ram.v       M4K templates: sdp_ram, tdp_ram
-│       ├── mem_arbiter.v     icache / dcache -> sram_ctl
-│       ├── sram_ctl.v        board SRAM controller
-│       └── imem.v, dmem.v    retired by the caches (kept, still unit tested)
-├── verif/
-│   ├── run_directed_tests.py, run_randomized_tests.py, run_unit_tests.py
-│   ├── tb/                   tb_pipeline.v, tb_bench.v, tb_dcache.v, tb_branch_predictor.v,
-│   │                         tb_sram_ctl.v, tb_sram_memtest.v, tb_imem.v, tb_dmem.v, sram_model.v
-│   ├── test_scripts/         directed tests (*.S)
-│   ├── test_lists/           default.txt, stall_only.txt, bp_only.txt, program.txt
-│   └── tools/                harness.py, rvsim.py (reference model), randgen.py, ...
-├── quartus/
-│   ├── soc_top.v             board wrapper: clocking, reset, halt, counters, display, JTAG
-│   ├── soc_top.qpf/.qsf/.sdc Quartus project, settings and pins, timing constraints
-│   ├── assign_pins.tcl       pin assignments, if Quartus drops them from the .qsf
-│   ├── bench.py              assemble a program, predict the board's numbers, compare with the board
-│   ├── read_results.tcl      read the board over JTAG
-│   ├── programs/             bench_sort.S, demo_fib.S, program.S
-│   └── sram_test/            standalone board SRAM memory test project (sram_memtest.v + top)
-└── build/                    test and bench output, one folder per run
-```
-
-The RTL is never copied: the Quartus project and every testbench build from
-`dev/src`, so simulation and synthesis always use the same source.
-
----
-
-## 2. Pipeline
+## 1. Pipeline
 
 ```
         IF              ID                  EX                    MEM                 WB
@@ -72,7 +27,7 @@ The RTL is never copied: the Quartus project and every testbench build from
                          hazard unit         redirect, wb value                         regfile write
 ```
 
-### 2.1 Stages
+### 1.1 Stages
 
 | Stage | What happens |
 |---|---|
@@ -82,7 +37,7 @@ The RTL is never copied: the Quartus project and every testbench build from
 | MEM | dcache hit check. A store writes its byte lanes and sets the line's dirty bit. A load is latched and its data comes out in WB. A miss freezes the pipeline. |
 | WB | Load data out of the dcache is aligned (LB/LH/LW/LBU/LHU). The WB mux picks load data or the value resolved in EX, then the regfile is written. |
 
-### 2.2 next_pc
+### 1.2 next_pc
 
 `next_pc` is redirected if there's a branch or jump, else if there's a stall
 we send the same PC again, else we take the prediction, else increment by 4 to
@@ -100,7 +55,7 @@ The branch compare in EX arrives last, and it sits on the crit path. So in
 (`next_pc_t`, `next_pc_n`, marked `(* keep *)` so Quartus doesn't merge them
 back) and the compare result only picks between them in the final 2:1 mux.
 
-### 2.3 Hazards and forwarding
+### 1.3 Hazards and forwarding
 
 | Hazard | Handled by | Cost |
 |---|---|---|
@@ -114,25 +69,51 @@ The only time we need a stall/bubble is when a consuming reg instr is behind a
 load. Each forwarding source and every side effect is gated by the stage's
 `valid` bit, so bubbles never do anything.
 
-### 2.4 Branch prediction
+### 1.4 Branch prediction
 
 Branch prediction takes place in ID, the actual branch resolves in EX.
 
-- 32 two-bit saturating counters, indexed by `pc[6:2]`, untagged. They reset to
-  `01` (weakly not taken).
+`BP_TYPE` in `dev/defines.vh` picks the predictor; all use 2-bit saturating
+counters that reset to `01` (weakly not taken), untagged:
+
+- `BP_BIMODAL`: 32 counters, indexed by `pc[6:2]`.
+- `BP_CORR`: 16 counters for each of the 32 `pc[6:2]` slots, picked by the last
+  4 conditional branch outcomes (`BP_HIST_BITS`). The history shifts when a
+  branch trains, so a branch right behind another predicts without that one's
+  outcome.
+- `BP_GSHARE`: 512 counters (as many as corr), indexed by `pc[10:2]` XOR the
+  4-bit global history placed in the top index bits, so only branches 32
+  words apart can share a counter. The history is speculative: a branch
+  shifts its prediction in as it enters EX, and a mispredict puts back the
+  history its lookup saw plus the real outcome.
+- `BP_LOCAL`: each of the 32 `pc[6:2]` slots keeps its own last 8 outcomes
+  (`BP_LHIST_BITS`), which pick one of 256 counters shared by all slots. The
+  slot history shifts when the branch trains.
+- `BP_TOURNAMENT`: local's and gshare's tables side by side, both trained on
+  every branch, and a 2-bit chooser per slot (reset to weakly gshare) that
+  steps toward whichever side was right when they disagree. The global
+  history shifts the prediction actually followed.
+
+Flushes over the 19 programs in `benchmarks/` (3.35M instrs; jalr included):
+bimodal 214,960, corr 202,033, gshare 201,386, local 197,211, tournament
+193,589.
+
+For every one:
+
 - A conditional branch in ID is predicted with its counter. Its target
   (`pc + immB`) is computed in ID, so a correctly predicted taken branch costs
   0 cycles.
 - JAL is always predicted taken in ID.
 - JALR resolves in EX (rs1 isn't forwarded into ID).
-- Every conditional branch trains its counter when it resolves in EX.
+- Every conditional branch trains its counter when it resolves in EX: the one
+  its lookup read, named by `pred_meta`, which travels with it through `id_ex`.
 - A mispredict in either direction redirects from EX and costs 1 cycle.
 
 Predicting in ID instead of IF keeps the predictor off the
 redirect -> next_pc crit path (see the notes at the top of
 `branch_predictor.v`).
 
-### 2.5 Clock enable and pipeline freeze
+### 1.5 Clock enable and pipeline freeze
 
 Every pipeline register, the regfile and the predictor update only when
 `pipe_en` is high:
@@ -150,7 +131,7 @@ lost or repeated. The cache controllers, the arbiter and `sram_ctl` run on
 every clock edge, so a miss keeps making progress while the pipeline is
 frozen.
 
-### 2.6 ISA coverage
+### 1.6 ISA coverage
 
 All of RV32I except the system parts: FENCE, ECALL and EBREAK execute as NOPs,
 and there are no CSRs, traps or interrupts. Programs are assembled at address
@@ -158,7 +139,7 @@ and there are no CSRs, traps or interrupts. Programs are assembled at address
 
 ---
 
-## 3. Memory system
+## 2. Memory system
 
 The on-board SRAM is main mem and the M4Ks are the caches.
 
@@ -181,7 +162,7 @@ The on-board SRAM is main mem and the M4Ks are the caches.
                0x40000–0x7FFFF  data mem  (256 KB)
 ```
 
-### 3.1 Memory scheme
+### 2.1 Memory scheme
 
 The SRAM is split in half: the low 256 KB is instr mem, the high 256 KB is
 data mem. Both have an 18-bit physical address space. The pipeline adds the
@@ -195,7 +176,7 @@ can never overwrite an instr.
 | instr mem | 0x00000–0x3FFFF | `pc[17:0]` | icache |
 | data mem | 0x40000–0x7FFFF | `addr[17:0]` | dcache |
 
-### 3.2 Cache address breakdown
+### 2.2 Cache address breakdown
 
 Both caches use 16-byte lines, so the bottom 4 bits are the offset into the
 line.
@@ -215,7 +196,7 @@ dcache  (1024 lines)         17    14 13              4 3    2 1    0
 - The data ram is addressed by `{index, word}`, which is just the low address
   bits, so the data ram is laid out like a small plain memory.
 
-### 3.3 icache
+### 2.3 icache
 
 8 KB, direct mapped, read only.
 
@@ -235,7 +216,7 @@ dcache  (1024 lines)         17    14 13              4 3    2 1    0
   8 KB runs straight from the bitstream with no image in SRAM. A reset does
   not invalidate the icache, so KEY0 reruns the program.
 
-### 3.4 dcache
+### 2.4 dcache
 
 16 KB, direct mapped, write-back, allocate on store miss (a store that misses
 fetches the line first, then writes it).
@@ -284,7 +265,7 @@ clock enable, so `tdp_ram` in `cache_ram.v` instantiates `altsyncram` directly
 for synthesis, with port B on its own clock enable, and keeps a behavioural
 model for iverilog.
 
-### 3.5 Memory arbiter
+### 2.5 Memory arbiter
 
 `sram_ctl` moves one line at a time, so `mem_arbiter.v` picks whose request
 goes:
@@ -296,7 +277,7 @@ goes:
 - The read data from `sram_ctl` goes to both caches; only the one that got
   the ack takes it.
 
-### 3.6 SRAM controller
+### 2.6 SRAM controller
 
 The SRAM is a 10 ns asynchronous part with a 16-bit data bus, so a 16-byte
 line is 8 beats. Each beat is SETUP (1 cycle), PULSE (`WAIT_CYCLES` = 2
@@ -318,7 +299,7 @@ cycles) and HOLD (1 cycle):
 The margin was chosen for first bring-up. `WAIT_CYCLES = 1` should still be
 inside the chip's spec but hasn't been tried on the board yet.
 
-### 3.7 M4K budget
+### 2.7 M4K budget
 
 | | Data | Tag + valid | Dirty | Total |
 |---|---|---|---|---|
@@ -326,7 +307,7 @@ inside the chip's spec but hasn't been tried on the board yet.
 | icache, 8 KB | 16 | 1 | — | 17 |
 | **Total** | | | | **52 / 52** |
 
-### 3.8 Miss costs
+### 2.8 Miss costs
 
 | Event | Cycles |
 |---|---|
@@ -339,9 +320,9 @@ costs fewer CPU cycles at the 25 MHz setting.
 
 ---
 
-## 4. Board wrapper (`quartus/soc_top.v`)
+## 3. Board wrapper (`quartus/soc_top.v`)
 
-### 4.1 Clocking and reset
+### 3.1 Clocking and reset
 
 | SW9:8 | CPU speed (latched at reset) |
 |---|---|
@@ -355,12 +336,12 @@ costs fewer CPU cycles at the 25 MHz setting.
   reset the dcache sweep runs, then the program starts. The counters start
   when the memory is ready, so the sweep is never counted.
 
-### 4.2 Halt
+### 3.2 Halt
 
 Retiring `j .` halts the program. The counters freeze immediately and the
 CPU's clock enable drops two cycles later, so we can examine final values.
 
-### 4.3 Display and readout words
+### 3.3 Display and readout words
 
 SW3:0 picks one of 16 readout words for HEX3..0 and the LEDs; SW4 = 1 shows the
 upper half. The same word numbers are the JTAG selectors, and the same numbers
@@ -384,7 +365,7 @@ carries the 1-bit debug outputs (one green LED each when word 8 is shown):
 |---|---|---|---|---|---|---|---|
 | | halted | speed | mem_ready | reg_write | retire_valid | stall | redirect |
 
-### 4.4 JTAG readout
+### 3.4 JTAG readout
 
 An In-System Sources and Probes instance ("BNCH") returns any readout word
 over the USB-Blaster. It uses no M4Ks. `quartus/read_results.tcl` reads all
@@ -392,9 +373,9 @@ over the USB-Blaster. It uses no M4Ks. `quartus/read_results.tcl` reads all
 
 ---
 
-## 5. Verification
+## 4. Verification
 
-### 5.1 Method
+### 4.1 Method
 
 Every program runs on the RTL and on `verif/tools/rvsim.py`, an independent
 RV32I reference model, and the runner compares:
@@ -405,12 +386,14 @@ RV32I reference model, and the runner compares:
 3. optional hand-written `# EXPECT` values in the test source
 4. optional exact stall and flush counts, so a pipeline that stalls when it
    doesn't need to still fails
+5. the flush count against `verif/tools/bp_model.py`, a model of the predictor
+   `BP_TYPE` selects, on every program (warm icache only)
 
 The SRAM model (`verif/tb/sram_model.v`) checks the chip's timing rules
 (address and data setup and hold around WE_N, access time, bus contention)
 on every simulation.
 
-### 5.2 Running the tests
+### 4.2 Running the tests
 
 ```
 python verif/run_unit_tests.py
@@ -435,13 +418,13 @@ misses freeze the whole pipeline, so they don't change those counts either.
 only checked warm. Run the combinations (for example `--icache cold --clken
 half`) after any change to the caches.
 
-### 5.3 Test sources
+### 4.3 Test sources
 
 | Kind | What |
 |---|---|
 | Directed (`verif/test_scripts/`) | Forwarding, load-use stalls at each distance, stores, control flow, memory ops, branch prediction (exact flush counts), dcache evictions (`dc_evict.S`) |
 | Random (`verif/tools/randgen.py`) | Biased to short RAW distances, x0, loads and stores that collide, loops, branches and jumps. Half the loads and stores go through x13, a base that jumps between regions 16 KB apart, so they fight over the same dcache lines and force dirty evictions. |
-| Unit (`run_unit_tests.py`) | Branch predictor, sram_ctl, the SRAM memory test, the retired imem/dmem, and `tb_dcache`: 50,000 random accesses against a reference memory, plus a run that checks the reset sweep zeroes an SRAM that powers up as X |
+| Unit (`run_unit_tests.py`) | Branch predictor (every `BP_TYPE`: directed checks, and every prediction of a 3,000-branch random stream against `bp_model.py` in `tb_bp_trace`), sram_ctl, the SRAM memory test, the retired imem/dmem, and `tb_dcache`: 50,000 random accesses against a reference memory, plus a run that checks the reset sweep zeroes an SRAM that powers up as X |
 
 Directed test annotations, checked against both the model and the RTL:
 
@@ -450,97 +433,6 @@ Directed test annotations, checked against both the model and the RTL:
 # EXPECT m2 = 0x55        data mem word 2
 # EXPECT stalls = 1
 # EXPECT flushes = 2
+# EXPECT flushes[corr] = 4   only when BP_TYPE is BP_CORR (overrides the line above)
+# EXPECT flushes[gshare,local] = 4   a tag can name several predictors
 ```
-
----
-
-## 6. Running on the board
-
-From `quartus/` (Quartus is at `D:\altera\13.0sp1\quartus\bin64`, not on PATH):
-
-```
-python bench.py programs/bench_sort.S                 # assemble, predict, install as program.hex
-quartus_sh --flow compile soc_top
-quartus_pgm -c "USB-Blaster [USB-0]" -m jtag -o "p;output_files/soc_top.sof"
-# set SW9:8 = 11, press KEY0
-python bench.py programs/bench_sort.S --no-install --board
-```
-
-`bench.py` runs `tb_bench.v`, a simulation twin of `soc_top` with the same
-counters, halt, freeze and readout mux, and prints all 16 words with the
-SW3:0 setting for each. With `--board` it reads the board over JTAG,
-simulates at the board's own speed setting, and marks any word that differs.
-
-A JTAG programming is lost at power-off. To keep a design, write
-`output_files/soc_top.pof` into the EPCS4 flash with the RUN/PROG switch on
-PROG.
-
----
-
-## 7. Results
-
-**bench_sort** (insertion sort of 64 words, 71 instrs), predicted by
-`bench.py`:
-
-| | 50 MHz setting | 25 MHz setting |
-|---|---|---|
-| cycles | 28,564 | 28,228 |
-| retired | 25,276 | 25,276 |
-| CPI | 1.130 | 1.117 |
-| load-use stalls | 1,044 | 1,044 |
-| flushes | 1,568 | 1,568 |
-| dcache misses / write-backs | 16 / 0 | 16 / 0 |
-| icache misses | 0 | 0 |
-| x28 (checksum) | 396622 | 396622 |
-
-The cycle count adds up: 25,276 retired + 1,044 stalls + 1,568 flushes +
-16 misses x 42 = 28,560, plus a few cycles of pipeline fill. The 16 misses
-are compulsory: one per 16-byte line of the 64-word array.
-
-Before the caches, bench_sort ran on the board and matched the prediction on
-every counter. The cache build has been checked in simulation and timing; it
-still needs its first `bench.py --board` comparison.
-
-**Timing:** Fmax ~52–54 MHz depending on placement, about +1 ns setup slack at
-50 MHz. The crit path is load data out of the dcache in WB -> forwarding into
-EX -> branch compare -> `next_pc` -> icache address. Two changes got it under
-20 ns after the caches went in:
-- the `next_pc` split described in section 2.2
-- a dedicated JALR adder, so the target doesn't wait on the ALU's shifter and
-  result mux
-
----
-
-## 8. Toolchain
-
-| Purpose | Tool |
-|---|---|
-| RTL simulation | Icarus Verilog (`iverilog -g2005`, `vvp`) |
-| Assembling programs | xPack RISC-V GCC `riscv-none-elf-gcc` / `objcopy` (`-march=rv32i -mabi=ilp32`, linked at 0) |
-| Reference model, runners | Python 3 |
-| Synthesis, fit, timing, programming, JTAG | Quartus II 13.0sp1 Web Edition (the last version that supports Cyclone II) |
-
-`verif/tools/harness.py` has the project's absolute path in `PROJECT`; edit
-that one line if the folder moves.
-
----
-
-## 9. Known limitations and next steps
-
-- **No loader yet.** Programs reach the CPU through the icache's bitstream
-  preload, so they're limited to 8 KB and changing programs means a
-  recompile. The SRAM's instr mem is never loaded on the board, so icache
-  misses only happen in simulation. Next: a loader (UART or Virtual JTAG)
-  that writes the SRAM, then a shared address map so code and data can use
-  all 512 KB.
-- **Harvard split.** Each side gets 256 KB and addresses wrap past that.
-  Moving to one shared address space makes `REGION` 19 for both caches and
-  adds one tag bit each, with no change in M4K count.
-- **No CSRs, traps, interrupts or MMU.**
-- **Thin timing margin** (~1 ns). Registering the load data in MEM would
-  remove the whole group of paths that start at the dcache output, and should
-  also allow ~65–70 MHz with a PLL.
-- **Miss handling could be faster:** `WAIT_CYCLES = 1` (re-test on the board),
-  a write-back buffer so a dirty miss doesn't wait for the write-back, reading
-  the dirty bit early with a bypass, merging S_TAG into the last S_FILLWR
-  cycle, or a mixed-width port B so a line goes in with one access.

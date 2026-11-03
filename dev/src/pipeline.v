@@ -47,7 +47,8 @@ module pipelined_datapath #(
     wire redirect;
     wire b_p;
     wire [31:0] branch_pred_pc;
-    wire bp_upd_valid, bp_upd_taken;
+    wire bp_upd_valid, bp_upd_taken, bp_upd_mispredict, bp_advance;
+    wire [`BP_META_W-1:0] bp_meta;
 
     // hold pc and if/id stable when a dmem accessing RAW dependency occurs,
     // or while the I-cache fetches the line for the instruction in ID
@@ -185,6 +186,7 @@ module pipelined_datapath #(
     reg        id_ex_jal;
     reg        id_ex_jalr;
     reg        id_ex_b_p;
+    reg [`BP_META_W-1:0] id_ex_bp_meta;     // predictor's lookup state, back to it at training
     reg        id_ex_valid;
 
     // predicts the instr in ID, trained by the branch resolving in EX
@@ -200,15 +202,20 @@ module pipelined_datapath #(
     .imm                (imm),
     .pred_take_branch   (b_p),
     .bp_pc              (branch_pred_pc),
+    .pred_meta          (bp_meta),
+    .id_advance         (bp_advance),
     .upd_valid          (bp_upd_valid),
     .upd_pc             (id_ex_pc),
-    .upd_taken          (bp_upd_taken)
+    .upd_taken          (bp_upd_taken),
+    .upd_mispredict     (bp_upd_mispredict),
+    .upd_meta           (id_ex_bp_meta)
     );
 
     // an I-cache miss leaves junk in ID: it must not interlock, and it bubbles EX
     wire lu_stall, hz_bubble;
     wire ex_bubble = hz_bubble || imiss;
     assign stall   = lu_stall  || imiss;
+    assign bp_advance = if_id_valid && !ex_bubble;  // same condition id_ex loads under
     hazard_unit u_hazard (
         .id_valid       (if_id_valid && ihit),
         .id_rs1_addr    (rs1_addr),
@@ -260,6 +267,7 @@ module pipelined_datapath #(
                 id_ex_jal       <= jal;
                 id_ex_jalr      <= jalr;
                 id_ex_b_p       <= b_p;
+                id_ex_bp_meta   <= bp_meta;
             end
         end
     end
@@ -379,8 +387,9 @@ module pipelined_datapath #(
     assign next_pc = any_branch ? next_pc_t : next_pc_n;
 
     // train on every real conditional branch
-    assign bp_upd_valid = id_ex_valid && id_ex_branch;
-    assign bp_upd_taken = take_branch;
+    assign bp_upd_valid      = id_ex_valid && id_ex_branch;
+    assign bp_upd_taken      = take_branch;
+    assign bp_upd_mispredict = id_ex_valid && br_mispredict;
 
 
     //ex_mem allocations:

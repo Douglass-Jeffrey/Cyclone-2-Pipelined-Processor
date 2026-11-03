@@ -4,9 +4,12 @@
 #
 # Walks mem[0..4] = 7,7,7,7,0, so the bne goes T,T,T,T,N.  From weakly
 # not-taken, only the first taken and the final not-taken mispredict.
+# corr, gshare, local, tournament: all four takens miss and the exit is
+# right, as in bp_loop.S.
 #
 # EXPECT stalls = 5
 # EXPECT flushes = 2
+# EXPECT flushes[corr,gshare,local,tournament] = 4
 # EXPECT x1 = 20
 # EXPECT x3 = 28
 # EXPECT x4 = 0

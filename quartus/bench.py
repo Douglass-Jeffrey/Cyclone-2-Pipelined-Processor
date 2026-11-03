@@ -110,7 +110,7 @@ def read_board():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("source", help="benchmark .S to assemble")
+    ap.add_argument("source", help="benchmark .S to assemble, or a prebuilt .hex (benchmarks/build.py)")
     ap.add_argument("--no-install", action="store_true",
                     help="do not overwrite quartus/program.hex")
     ap.add_argument("--no-sim", action="store_true",
@@ -147,8 +147,13 @@ def main():
     os.makedirs(build)
     # tb_bench.v reads program.hex from the folder vvp is started in
     hexp = os.path.join(build, "program.hex")
-    words = rvsim.assemble(args.source, hexp)   # also writes program.elf / .bin here
-    print("assembled %-28s %d instructions" % (os.path.basename(args.source), len(words)))
+    if args.source.lower().endswith(".hex"):    # prebuilt, e.g. benchmarks/out/*.hex
+        shutil.copy(args.source, hexp)
+        words = [int(w, 16) for w in open(hexp).read().split()]
+        print("loaded    %-28s %d words" % (os.path.basename(args.source), len(words)))
+    else:
+        words = rvsim.assemble(args.source, hexp)   # also writes program.elf / .bin here
+        print("assembled %-28s %d instructions" % (os.path.basename(args.source), len(words)))
     if len(words) > 2048:
         print("  WARNING: the I-cache preload holds 2048 words (8 KB); this program will be truncated.")
 

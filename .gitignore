@@ -17,5 +17,8 @@ quartus/simulation/
 quartus/*.bin
 quartus/*.elf
 examples/
+# upstream benchmark sources (fetched at pinned commits) and their builds
+benchmarks/ext/
+benchmarks/out/
 __pycache__/
 *.pyc

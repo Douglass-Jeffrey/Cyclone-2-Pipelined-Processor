@@ -33,6 +33,11 @@ set_global_assignment -name VERILOG_FILE ../dev/src/sram_ctl.v
 set_global_assignment -name VERILOG_FILE ../dev/src/hazard_unit.v
 set_global_assignment -name VERILOG_FILE ../dev/src/forwarding_unit.v
 set_global_assignment -name VERILOG_FILE ../dev/src/branch_predictor.v
+set_global_assignment -name VERILOG_FILE ../dev/src/bimodal_bp.v
+set_global_assignment -name VERILOG_FILE ../dev/src/corr_bp.v
+set_global_assignment -name VERILOG_FILE ../dev/src/gshare_bp.v
+set_global_assignment -name VERILOG_FILE ../dev/src/local_bp.v
+set_global_assignment -name VERILOG_FILE ../dev/src/tournament_bp.v
 
 # Timing
 set_global_assignment -name SDC_FILE soc_top.sdc

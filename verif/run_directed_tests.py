@@ -19,6 +19,9 @@ reference model and the RTL so the model is not taken on trust:
     # EXPECT stalls = 1     exact number of load-use stall cycles (RTL only)
     # EXPECT flushes = 2    exact number of front-end flushes: branch mispredicts
     #                       plus jalr (RTL only)
+    # EXPECT flushes[corr] = 4   only when dev/defines.vh builds BP_CORR; wins
+    #                       over the untagged count (stalls can be tagged too)
+    # EXPECT flushes[gshare,local] = 4   a tag can name several predictors
 
 Stall and flush counts are taken on edges where the pipeline moves, so every
 test must pass unchanged under every --clken mode.  --icache cold skips them:
@@ -35,6 +38,7 @@ import sys
 
 # harness.py (paths and shared machinery) sits in tools/ beside this script
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/tools")
+import bp_model
 import harness
 import rvsim
 from listfile import read_list
@@ -74,17 +78,27 @@ def read_test_list(path):
     return files
 
 
-# Read a .S file's annotations: ([(kind, index, value), ...], stalls or None, flushes or None)
-def parse_expect(path):
-    values, counts = [], {}
+# Read a .S file's annotations: ([(kind, index, value), ...], stalls or None, flushes or None);
+# bp_type is the predictor built ("BP_CORR"), which picks the tagged counts that apply
+def parse_expect(path, bp_type):
+    values, counts, tagged = [], {}, {}
     for line in open(path):
-        m = re.match(r"#\s*EXPECT\s+(stalls|flushes)\s*=\s*(\d+)", line)
+        m = re.match(r"#\s*EXPECT\s+(stalls|flushes)(?:\[([\w,\s]+)\])?\s*=\s*(\d+)", line)
         if m:
-            counts[m.group(1)] = int(m.group(2))
+            kind, tags, n = m.group(1), m.group(2), int(m.group(3))
+            if tags is None:
+                counts[kind] = n
+                continue
+            for tag in ("BP_" + t.strip().upper() for t in tags.split(",")):
+                if tag not in bp_model.RTL_MODELS:
+                    sys.exit("%s: no predictor %s: %s" % (path, tag, line.strip()))
+                if tag == bp_type:
+                    tagged[kind] = n
             continue
         m = re.match(r"#\s*EXPECT\s+([xm])(\d+)\s*=\s*(-?\w+)", line)
         if m:
             values.append((m.group(1), int(m.group(2)), int(m.group(3), 0) & 0xFFFFFFFF))
+    counts.update(tagged)
     return values, counts.get("stalls"), counts.get("flushes")
 
 
@@ -113,6 +127,7 @@ def main(argv=None):
 
     run_dir = harness.new_run_dir("directed", args.name)
     vvp = harness.build_rtl(args.dev, run_dir)
+    bp_type = bp_model.rtl_type(args.dev + "/defines.vh")
 
     failures = 0
     for filename in files:
@@ -121,9 +136,10 @@ def main(argv=None):
         folder = run_dir + "/" + name
         os.makedirs(folder)
         words = rvsim.assemble(src, folder + "/program.hex")
-        values, stalls, flushes = parse_expect(src)
+        values, stalls, flushes = parse_expect(src, bp_type)
         failures += harness.report(name, *harness.check_against_ref(
-            vvp, words, folder, values, stalls, flushes, args.clken, args.seed, args.icache))
+            vvp, words, folder, values, stalls, flushes, args.clken, args.seed, args.icache,
+            dev_dir=args.dev))
 
     return harness.finish(failures, run_dir)
 

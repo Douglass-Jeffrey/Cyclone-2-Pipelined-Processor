@@ -53,7 +53,8 @@ def main(argv=None):
         words = rvsim.assemble(src, folder + "/program.hex")
         errors, n, stalls, flushes = harness.check_against_ref(vvp, words, folder,
                                                                clken=args.clken, seed=s,
-                                                               icache=args.icache)
+                                                               icache=args.icache,
+                                                               dev_dir=args.dev)
         if errors or args.seed is not None:
             failures += harness.report("%s  [%s]" % (name, src), errors, n, stalls, flushes)
         elif s % 50 == 0:

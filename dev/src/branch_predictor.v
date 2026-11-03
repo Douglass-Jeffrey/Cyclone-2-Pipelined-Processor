@@ -28,8 +28,16 @@
 * Starting with simple 2 bit predictor
 * the predictor also handles jal; jalr still resolves in EX (rs1 isn't forwarded in ID)
 */
+// Ports every predictor shares, so a new one drops in without touching pipeline.v:
+// lookup in ID, id_advance when that instr enters EX (where speculative history
+// shifts), update from EX. pred_meta is whatever the lookup needs again at
+// training (index, history snapshot); the pipeline carries it in id_ex unchanged.
+// TYPE (dev/defines.vh BP_TYPE) picks which predictor this is.
 module branch_predictor #(
-    parameter IDX_BITS = 5                  // table has 2^IDX_BITS counters
+    parameter TYPE      = `BP_TYPE,
+    parameter IDX_BITS  = `BP_IDX_BITS,     // 2^IDX_BITS pc slots
+    parameter HIST_BITS = `BP_HIST_BITS,    // global history bits (corr, gshare, tournament)
+    parameter LHIST_BITS = `BP_LHIST_BITS   // bits per slot history (local, tournament)
 ) (
     input   wire        clk,
     input   wire        rst,
@@ -42,49 +50,57 @@ module branch_predictor #(
     input   wire        jalr,
     input   wire        branch,
     input   wire [31:0] imm,
-    output  reg         pred_take_branch,
-    output  reg  [31:0] bp_pc,
+    output  wire        pred_take_branch,
+    output  wire [31:0] bp_pc,
+    output  wire [`BP_META_W-1:0] pred_meta,
+    input   wire        id_advance,         // the instr in ID moves to EX at this edge
 
     // update: conditional branch resolving in EX
     input   wire        upd_valid,
     input   wire [31:0] upd_pc,
-    input   wire        upd_taken
+    input   wire        upd_taken,
+    input   wire        upd_mispredict,     // it was predicted wrong, front end redirected
+    input   wire [`BP_META_W-1:0] upd_meta  // pred_meta from its own lookup
 );
-    //branch = pc+immb
-    //jal    = pc+immj
-
-    // 2-bit saturating counters: 00/01 predict not taken, 10/11 predict taken
-    reg [1:0] two_bp [0:(1<<IDX_BITS)-1];
-    integer i;
-
-    // map via lowest pc bits
-    wire [IDX_BITS-1:0] lk_idx  = pc[IDX_BITS+1:2];
-    wire [IDX_BITS-1:0] upd_idx = upd_pc[IDX_BITS+1:2];
-
-    //update predictor fsm on success or mispredict
-    always @(posedge clk) begin
-        if (rst) begin
-            for (i = 0; i < (1<<IDX_BITS); i = i + 1)
-                two_bp[i] <= 2'b01;
+    generate
+        if (TYPE == `BP_BIMODAL) begin : g_bimodal
+            bimodal_bp #(.IDX_BITS(IDX_BITS)) u_pred (
+                .clk(clk), .rst(rst), .clk_en(clk_en),
+                .valid(valid), .pc(pc), .jal(jal), .jalr(jalr), .branch(branch), .imm(imm),
+                .pred_take_branch(pred_take_branch), .bp_pc(bp_pc), .pred_meta(pred_meta),
+                .id_advance(id_advance), .upd_valid(upd_valid), .upd_pc(upd_pc),
+                .upd_taken(upd_taken), .upd_mispredict(upd_mispredict), .upd_meta(upd_meta));
+        end else if (TYPE == `BP_CORR) begin : g_corr
+            corr_bp #(.IDX_BITS(IDX_BITS), .HIST_BITS(HIST_BITS)) u_pred (
+                .clk(clk), .rst(rst), .clk_en(clk_en),
+                .valid(valid), .pc(pc), .jal(jal), .jalr(jalr), .branch(branch), .imm(imm),
+                .pred_take_branch(pred_take_branch), .bp_pc(bp_pc), .pred_meta(pred_meta),
+                .id_advance(id_advance), .upd_valid(upd_valid), .upd_pc(upd_pc),
+                .upd_taken(upd_taken), .upd_mispredict(upd_mispredict), .upd_meta(upd_meta));
+        end else if (TYPE == `BP_GSHARE) begin : g_gshare
+            gshare_bp #(.IDX_BITS(IDX_BITS), .HIST_BITS(HIST_BITS)) u_pred (
+                .clk(clk), .rst(rst), .clk_en(clk_en),
+                .valid(valid), .pc(pc), .jal(jal), .jalr(jalr), .branch(branch), .imm(imm),
+                .pred_take_branch(pred_take_branch), .bp_pc(bp_pc), .pred_meta(pred_meta),
+                .id_advance(id_advance), .upd_valid(upd_valid), .upd_pc(upd_pc),
+                .upd_taken(upd_taken), .upd_mispredict(upd_mispredict), .upd_meta(upd_meta));
+        end else if (TYPE == `BP_LOCAL) begin : g_local
+            local_bp #(.IDX_BITS(IDX_BITS), .LHIST_BITS(LHIST_BITS)) u_pred (
+                .clk(clk), .rst(rst), .clk_en(clk_en),
+                .valid(valid), .pc(pc), .jal(jal), .jalr(jalr), .branch(branch), .imm(imm),
+                .pred_take_branch(pred_take_branch), .bp_pc(bp_pc), .pred_meta(pred_meta),
+                .id_advance(id_advance), .upd_valid(upd_valid), .upd_pc(upd_pc),
+                .upd_taken(upd_taken), .upd_mispredict(upd_mispredict), .upd_meta(upd_meta));
+        end else if (TYPE == `BP_TOURNAMENT) begin : g_tournament
+            tournament_bp #(.IDX_BITS(IDX_BITS), .HIST_BITS(HIST_BITS), .LHIST_BITS(LHIST_BITS)) u_pred (
+                .clk(clk), .rst(rst), .clk_en(clk_en),
+                .valid(valid), .pc(pc), .jal(jal), .jalr(jalr), .branch(branch), .imm(imm),
+                .pred_take_branch(pred_take_branch), .bp_pc(bp_pc), .pred_meta(pred_meta),
+                .id_advance(id_advance), .upd_valid(upd_valid), .upd_pc(upd_pc),
+                .upd_taken(upd_taken), .upd_mispredict(upd_mispredict), .upd_meta(upd_meta));
+        end else begin : g_unknown
+            BP_TYPE_names_no_predictor u_err ();    // no such module: an unknown TYPE fails to build
         end
-        else if (clk_en && upd_valid) begin
-            if (upd_taken)
-                two_bp[upd_idx] <= (two_bp[upd_idx] != 2'b11) ? two_bp[upd_idx] + 2'd1 : 2'b11;
-            else
-                two_bp[upd_idx] <= (two_bp[upd_idx] != 2'b00) ? two_bp[upd_idx] - 2'd1 : 2'b00;
-        end
-    end
-
-    // if instr is branch decide based on predictor; defaults first so nothing latches
-    always @(*) begin
-        pred_take_branch = 1'b0;
-        bp_pc            = pc + imm;
-        if (valid) begin
-            if (branch)
-                pred_take_branch = two_bp[lk_idx][1];
-            else if (jal && !jalr)          // ctl sets jal for jalr too
-                pred_take_branch = 1'b1;
-        end
-    end
+    endgenerate
 
 endmodule

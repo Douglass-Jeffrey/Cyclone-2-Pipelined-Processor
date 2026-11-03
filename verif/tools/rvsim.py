@@ -50,6 +50,7 @@ class Ref:
         self.dmem = [0] * DMEM_WORDS
         self.pc = 0
         self.trace = []          # wb values (pc, instr, wen, rd, data)
+        self.branch_taken = []   # each conditional branch's outcome, in order (bp_model.py)
         self.halted = False
 
     # little endian dmem, addresses wrap like rtl idxs
@@ -116,6 +117,7 @@ class Ref:
             sa, sb = sign_ext(a, 32), sign_ext(b, 32)
             taken = {0: a == b, 1: a != b, 4: sa < sb, 5: sa >= sb,
                      6: a < b, 7: a >= b}.get(f3, False)
+            self.branch_taken.append(taken)
             if taken:
                 nxt = (pc + imm_b) & M32
         elif op == 0x03:                                # LOAD

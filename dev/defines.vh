@@ -209,6 +209,18 @@
 //caching
 `define NUM_DCACHE_LANES 3'd4
 
+//branch prediction (verif/tools/bp_model.py reads these to build the matching model)
+`define BP_BIMODAL         0            // bimodal_bp.v: one 2-bit counter per pc slot
+`define BP_CORR            1            // corr_bp.v: global history picks the slot's counter
+`define BP_GSHARE          2            // gshare_bp.v: pc XOR global history picks a counter
+`define BP_LOCAL           3            // local_bp.v: the slot's own history picks a counter
+`define BP_TOURNAMENT      4            // tournament_bp.v: local and gshare, a chooser per slot picks one
+`define BP_TYPE            `BP_BIMODAL  // which predictor branch_predictor.v instantiates
+`define BP_IDX_BITS        5            // 2^BP_IDX_BITS pc slots
+`define BP_META_W          32           // predictor state carried from lookup (ID) to training (EX)
+`define BP_HIST_BITS       4            // global history bits (corr, gshare, tournament)
+`define BP_LHIST_BITS      8            // local history bits per pc slot (local, tournament)
+
 
 
 

@@ -19,3 +19,8 @@ sram_ctl.v
 hazard_unit.v
 forwarding_unit.v
 branch_predictor.v
+bimodal_bp.v
+corr_bp.v
+gshare_bp.v
+local_bp.v
+tournament_bp.v

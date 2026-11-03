@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 
+import bp_model
 import rvsim
 from rtl_sources import rtl_sources
 
@@ -58,9 +59,11 @@ def new_run_dir(kind, name=None):
 
 # Compile a testbench against every RTL file, plus `extra` files outside the
 # design (WIP modules, simulation models); top (iverilog -s) picks the one
-# root module, so the design's own top is not elaborated alongside a unit test
-def compile_tb(dev_dir, vvp, tb, top=None, extra=()):
+# root module, so the design's own top is not elaborated alongside a unit test;
+# params overrides top's parameters (iverilog -P)
+def compile_tb(dev_dir, vvp, tb, top=None, extra=(), params=None):
     cmd = ["iverilog", "-g2005", "-I", dev_dir, "-o", vvp] + (["-s", top] if top else []) + \
+          ["-P%s.%s=%d" % (top, k, v) for k, v in (params or {}).items()] + \
           [tb] + rtl_sources(dev_dir) + list(extra)
     return subprocess.run(cmd, capture_output=True, text=True)
 
@@ -104,15 +107,17 @@ def run_rtl(vvp, test_folder, cycles, clken="full", seed=1, icache="warm"):
 
 # ---- checking one program --------------------------------------------------
 def check_against_ref(vvp, words, test_folder, expect=None, expect_stalls=None,
-                      expect_flushes=None, clken="full", seed=1, icache="warm"):
+                      expect_flushes=None, clken="full", seed=1, icache="warm", max_steps=100000,
+                      dev_dir=DEV_DIR):
     """Run a program on the RTL and the model; return (errors, n_instr, stalls, flushes).
 
     With icache="cold" the front end waits on instruction misses, which can
     move load-use stalls and branch-predictor training, so exact stall and
-    flush counts are only checked warm.
+    flush counts are only checked warm.  dev_dir is the design vvp was built
+    from: its defines.vh says which predictor model the flushes must match.
     """
     ref = rvsim.Ref(words)
-    ref.run()
+    ref.run(max_steps)
     ref_trace = rvsim.trace_lines(ref.trace)
     cycles = 3 * len(ref_trace) + 60          # enabled cycles; generous: CPI stays well under 3
     rtl_trace, regs, mem, stalls, flushes = run_rtl(vvp, test_folder, cycles, clken, seed, icache)
@@ -170,6 +175,14 @@ def check_against_ref(vvp, words, test_folder, expect=None, expect_stalls=None,
     if expect_flushes is not None and flushes != expect_flushes:
         errors.append("EXPECT flushes = %d but the RTL flushed %d time(s)"
                       % (expect_flushes, flushes))
+
+    # 8. every program's flush count against the predictor model, which is to
+    #    the predictor what rvsim is to the datapath (warm only, as above)
+    if icache != "cold":
+        model = bp_model.flushes(ref, bp_model.rtl_predictor(dev_dir + "/defines.vh"))
+        if flushes != model:
+            errors.append("flushes: RTL %d, predictor model %d (verif/tools/bp_model.py)"
+                          % (flushes, model))
 
     return errors, len(ref_trace), stalls, flushes
 
