@@ -1,0 +1,572 @@
+diff --git a/dev/src/sram_ctl.v b/dev/src/sram_ctl.v
+index 061b569..c5ea33c 100644
+--- a/dev/src/sram_ctl.v
++++ b/dev/src/sram_ctl.v
+@@ -6,14 +6,20 @@
+ // so neither cache sees the SRAM pins or timing. The chip's data bus is 16 bits, so
+ // one line (128 bits) is moved as 8 back-to-back 16-bit SRAM words ("beats").
+ //
+-// Each beat is SETUP (1 cycle) -> PULSE (WAIT_CYCLES) -> HOLD (1 cycle).
+-// Writes: address and data reach the pins a full cycle before WE_N falls and stay a
+-// full cycle after it rises, so nothing changes on the same edge as WE_N.
+-// Reads: OE_N stays low for the whole line, data is sampled WAIT_CYCLES+1 cycles after
+-// the address (60 ns at 50 MHz) against the chip's 10-12 ns access time.
++// Writes, WR_FAST = 0: each beat is SETUP (1 cycle) -> PULSE (WAIT_CYCLES) -> HOLD (1 cycle),
++// so address and data reach the pins a full cycle before WE_N falls and stay a full cycle
++// after it rises. WR_FAST = 1: two cycles per beat, with WE_N from a falling-edge register:
++// address and data change on a rising edge, WE_N falls half a cycle later and rises half a
++// cycle before the next beat's address (10 ns setup, 20 ns pulse, 10 ns hold). Either way
++// nothing changes on the same edge as WE_N.
++// Reads are pipelined: an async SRAM needs no strobe, its data just follows the address
++// while OE_N is low. Each beat's address stays on the pins RD_CYCLES cycles, the input
++// register samples DQ on the edge that ends it (as the next address goes out), and the
++// beat is stored a cycle later. RD_CYCLES = 1 budgets 20 ns for pin-out + the chip's
++// 10 ns access + pin-in.
+ // Every pin comes straight from a register, so Quartus can use the I/O-cell registers
+ // and keep pin-to-pin skew small.
+-// 4 cycles per beat at WAIT_CYCLES = 2: 32 per line, plus accept and ack, ~35 per line.
++// Per line: writes (WAIT_CYCLES+2)*8 + 2 cycles (16 + 1 with WR_FAST), reads 8*RD_CYCLES + 2.
+ 
+ //DJEFFREY TODO, in future consider speeding up sram ops
+ // options to do this are
+@@ -25,7 +31,9 @@
+ `timescale 1ns/1ps
+ module sram_ctl #(
+     parameter ADDR_BITS   = 19,     // byte address space behind this controller (512KB)
+-    parameter WAIT_CYCLES = 2       // clock cycles per beat between SETUP and HOLD (>=1)
++    parameter WAIT_CYCLES = 2,      // write: cycles WE_N stays low per beat (>=1), WR_FAST = 0
++    parameter WR_FAST     = 1,      // write: 1 = two-cycle beats, WE_N on the falling edge
++    parameter RD_CYCLES   = 1       // read: cycles each beat's address is on the pins (>=1)
+ ) (
+     input  wire         clk,
+     input  wire         rst,
+@@ -48,7 +56,7 @@ module sram_ctl #(
+     // output enable, low for the whole of a read line
+     output reg                  SRAM_OE_N,
+     // write strobe, low during PULSE on write lines, the chip stores on its rising edge
+-    output reg                  SRAM_WE_N,
++    output wire                 SRAM_WE_N,
+     // byte enables, always on (see below)
+     output wire                 SRAM_UB_N,
+     output wire                 SRAM_LB_N
+@@ -60,18 +68,28 @@ module sram_ctl #(
+     assign SRAM_UB_N = 1'b0;
+     assign SRAM_LB_N = 1'b0;
+ 
+-    // FSM states for one line transfer, SETUP -> PULSE -> HOLD repeats for each of the 8 beats
+-    localparam S_IDLE = 3'd0, S_SETUP = 3'd1, S_PULSE = 3'd2, S_HOLD = 3'd3, S_ACK = 3'd4;
+-    reg [2:0]           state;
++    // write lines: SETUP -> PULSE -> HOLD per beat. read lines: S_READ per beat, then
++    // S_LAST stores the final beat and acks
++    localparam S_IDLE = 4'd0, S_SETUP = 4'd1, S_PULSE = 4'd2, S_HOLD = 4'd3, S_ACK = 4'd4,
++               S_READ = 4'd5, S_LAST = 4'd6, S_WA = 4'd7, S_WB = 4'd8;
++    reg [3:0]           state;
++    // WE_N from the rising-edge FSM (WR_FAST = 0) or a falling-edge register (WR_FAST = 1):
++    // low from half a cycle into S_WA until half a cycle into the beat's second cycle
++    reg                 we_n_pos, we_n_neg;
++    assign SRAM_WE_N = WR_FAST ? we_n_neg : we_n_pos;
++    always @(negedge clk) we_n_neg <= rst || (state != S_WA);
+     // line index of the transfer, addr[ADDR_BITS-1:4] SRAM_ADDR = {base, beat}
+     reg [ADDR_BITS-5:0] base;
+     // which 16-bit beat of the line is on the pins (0..7)
+     reg [2:0]           beat;
+-    // cycles left in PULSE
++    // cycles left in PULSE (write) or in the beat's address window (read)
+     reg [7:0]           cnt;
+     // copies of we and wdata latched at accept, so the master's bus can change afterwards
+     reg                 we_r;
+     reg [127:0]         wdata_r;
++    // read: dq_in holds beat cap_beat this cycle
++    reg                 cap;
++    reg [2:0]           cap_beat;
+ 
+     // DQ is driven only from registers, and only on write lines (dq_oe), so we never
+     // drive the bus at the same time as the chip. dq_in samples the pins every cycle
+@@ -87,10 +105,12 @@ module sram_ctl #(
+         rdata     = 128'h0;
+         SRAM_CE_N = 1'b1;
+         SRAM_OE_N = 1'b1;
+-        SRAM_WE_N = 1'b1;
++        we_n_pos  = 1'b1;
++        we_n_neg  = 1'b1;
+         SRAM_ADDR = {(ADDR_BITS-1){1'b0}};
+         dq_oe = 1'b0; dq_out = 16'h0; dq_in = 16'h0;
+         base = 0; beat = 3'd0; cnt = 8'd0; we_r = 1'b0; wdata_r = 128'h0;
++        cap = 1'b0; cap_beat = 3'd0;
+     end
+ 
+     always @(posedge clk) dq_in <= SRAM_DQ;
+@@ -100,12 +120,16 @@ module sram_ctl #(
+         if (rst) begin
+             state     <= S_IDLE;
+             ack       <= 1'b0;
++            cap       <= 1'b0;
+             SRAM_CE_N <= 1'b1;
+             SRAM_OE_N <= 1'b1;
+-            SRAM_WE_N <= 1'b1;
++            we_n_pos  <= 1'b1;
+             dq_oe     <= 1'b0;
+         end else begin
+             ack <= 1'b0;
++            // a read beat sampled on the last edge goes into its slot
++            cap <= 1'b0;
++            if (cap) rdata[16*cap_beat +: 16] <= dq_in;
+             case (state)
+             // wait for a request. !ack keeps a master that hasn't yet seen its ack from being
+             // accepted again for a second, spurious transfer.
+@@ -116,41 +140,78 @@ module sram_ctl #(
+                         we_r      <= we;
+                         wdata_r   <= wdata;
+                         beat      <= 3'd0;
++                        cnt       <= RD_CYCLES[7:0];
+                         SRAM_ADDR <= {addr[ADDR_BITS-1:4], 3'd0};
+                         SRAM_CE_N <= 1'b0;
+                         // a read line keeps OE_N low throughout
+                         SRAM_OE_N <= we;
+                         dq_oe     <= we;
+                         dq_out    <= wdata[15:0];
+-                        state     <= S_SETUP;
++                        state     <= !we ? S_READ : WR_FAST ? S_WA : S_SETUP;
++                    end
++            // read: the beat's address has been out cnt cycles. On the edge that ends its
++            // window dq_in samples it; the next beat's address goes out on that same edge
++            S_READ: begin
++                        cnt <= cnt - 8'd1;
++                        if (cnt == 8'd1) begin
++                            cap      <= 1'b1;
++                            cap_beat <= beat;
++                            if (beat == LINE_BEATS-1) begin
++                                SRAM_CE_N <= 1'b1;
++                                SRAM_OE_N <= 1'b1;
++                                state     <= S_LAST;
++                            end else begin
++                                beat      <= beat + 3'd1;
++                                SRAM_ADDR <= {base, beat + 3'd1};
++                                cnt       <= RD_CYCLES[7:0];
++                            end
++                        end
++                    end
++            // the last beat goes into rdata on this edge (cap), so the line is whole with ack
++            S_LAST: begin
++                        ack   <= 1'b1;
++                        state <= S_IDLE;
++                    end
++            // WR_FAST: first cycle of a beat, WE_N falls at its middle
++            S_WA:   state <= S_WB;
++            // WR_FAST: second cycle, WE_N rises at its middle; the next beat's address and
++            // data (or the end of the line) follow on the edge after
++            S_WB:   begin
++                        if (beat == LINE_BEATS-1) begin
++                            SRAM_CE_N <= 1'b1;
++                            dq_oe     <= 1'b0;
++                            ack       <= 1'b1;
++                            state     <= S_IDLE;
++                        end else begin
++                            beat      <= beat + 3'd1;
++                            SRAM_ADDR <= {base, beat + 3'd1};
++                            dq_out    <= wdata_r[16*(beat+1) +: 16];
++                            state     <= S_WA;
++                        end
+                     end
+             // address (and write data) have been on the pins for a full cycle. Load the PULSE
+-            // count and, on a write, drop WE_N on the next edge
++            // count and drop WE_N on the next edge
+             S_SETUP: begin
+                         cnt       <= WAIT_CYCLES[7:0];
+-                        SRAM_WE_N <= !we_r;
++                        we_n_pos  <= 1'b0;
+                         state     <= S_PULSE;
+                     end
+-            // wait WAIT_CYCLES cycles. A write holds WE_N low the whole time, a read lets the
+-            // chip's data settle on DQ. On the last cycle WE_N goes back high (the write
+-            // commits on that rising edge) and we enter S_HOLD
++            // wait WAIT_CYCLES cycles with WE_N low. On the last cycle WE_N goes back high
++            // (the write commits on that rising edge) and we enter S_HOLD
+             S_PULSE: begin
+                         cnt <= cnt - 8'd1;
+                         if (cnt == 8'd1) begin
+                             // write ends; address and data held through HOLD
+-                            SRAM_WE_N <= 1'b1;
++                            we_n_pos  <= 1'b1;
+                             state     <= S_HOLD;
+                         end
+                     end
+-            // address and write data stay one more cycle after WE_N rose (hold time). dq_in caught
+-            // the read data on the edge that ended PULSE, store it in this beat's slot of rdata.
+-            // Then either set up the next beat's address and data and go back to S_SETUP, or after
++            // address and write data stay one more cycle after WE_N rose (hold time). Then
++            // either set up the next beat's address and data and go back to S_SETUP, or after
+             // beat 7 deselect the chip, release the bus and go to S_ACK
+             S_HOLD:  begin
+-                        if (!we_r) rdata[16*beat +: 16] <= dq_in;
+                         if (beat == LINE_BEATS-1) begin
+                             SRAM_CE_N <= 1'b1;
+-                            SRAM_OE_N <= 1'b1;
+                             dq_oe     <= 1'b0;
+                             state     <= S_ACK;
+                         end else begin
+@@ -160,8 +221,7 @@ module sram_ctl #(
+                             state     <= S_SETUP;
+                         end
+                     end
+-            // raise ack for one cycle, rdata holds the whole line (on a read), then back to S_IDLE
+-            // ready for the next request
++            // raise ack for one cycle, then back to S_IDLE ready for the next request
+             S_ACK:   begin
+                         ack   <= 1'b1;
+                         state <= S_IDLE;
+diff --git a/dev/src/cache_ram.v b/dev/src/cache_ram.v
+index 0df5d15..d9ec9c3 100644
+--- a/dev/src/cache_ram.v
++++ b/dev/src/cache_ram.v
+@@ -36,28 +36,32 @@ endmodule
+ // Quartus 13 will not infer a true dual-port RAM with a clock enable, so
+ // synthesis instantiates altsyncram (port B on clock1, so it gets its own
+ // enable) and simulation uses the equivalent behavioural model.
++// Port B is 2^RW times as wide and as shallow as port A (altsyncram's mixed
++// width): its word i is port A's words i*2^RW.., the lowest in its LSBs.
+ module tdp_ram #(
+     parameter AW = 12,
+-    parameter DW = 8
++    parameter DW = 8,
++    parameter RW = 0
+ ) (
+-    input  wire          clk,
+-    input  wire          en_a,
+-    input  wire          we_a,
+-    input  wire [AW-1:0] addr_a,
+-    input  wire [DW-1:0] wdata_a,
+-    output wire [DW-1:0] rdata_a,
+-    input  wire          we_b,
+-    input  wire [AW-1:0] addr_b,
+-    input  wire [DW-1:0] wdata_b,
+-    output wire [DW-1:0] rdata_b
++    input  wire                clk,
++    input  wire                en_a,
++    input  wire                we_a,
++    input  wire [AW-1:0]       addr_a,
++    input  wire [DW-1:0]       wdata_a,
++    output wire [DW-1:0]       rdata_a,
++    input  wire                we_b,
++    input  wire [AW-RW-1:0]    addr_b,
++    input  wire [(DW<<RW)-1:0] wdata_b,
++    output wire [(DW<<RW)-1:0] rdata_b
+ );
+ `ifdef __ICARUS__
+-    reg [DW-1:0] mem [0:(1<<AW)-1];
+-    reg [DW-1:0] qa, qb;
++    reg [DW-1:0]       mem [0:(1<<AW)-1];
++    reg [DW-1:0]       qa;
++    reg [(DW<<RW)-1:0] qb;
+     assign rdata_a = qa;
+     assign rdata_b = qb;
+ 
+-    integer i;
++    integer i, j;
+     initial for (i = 0; i < (1<<AW); i = i + 1) mem[i] = {DW{1'b0}};
+ 
+     always @(posedge clk) begin
+@@ -73,10 +77,12 @@ module tdp_ram #(
+ 
+     always @(posedge clk) begin
+         if (we_b) begin
+-            mem[addr_b] <= wdata_b;
+-            qb          <= wdata_b;
++            for (j = 0; j < (1<<RW); j = j + 1)
++                mem[addr_b * (1<<RW) + j] <= wdata_b[DW*j +: DW];
++            qb <= wdata_b;
+         end else begin
+-            qb          <= mem[addr_b];
++            for (j = 0; j < (1<<RW); j = j + 1)
++                qb[DW*j +: DW] <= mem[addr_b * (1<<RW) + j];
+         end
+     end
+ `else
+@@ -88,9 +94,9 @@ module tdp_ram #(
+         .width_a                            (DW),
+         .widthad_a                          (AW),
+         .numwords_a                         (1 << AW),
+-        .width_b                            (DW),
+-        .widthad_b                          (AW),
+-        .numwords_b                         (1 << AW),
++        .width_b                            (DW << RW),
++        .widthad_b                          (AW - RW),
++        .numwords_b                         (1 << (AW - RW)),
+         .width_byteena_a                    (1),
+         .width_byteena_b                    (1),
+         .outdata_reg_a                      ("UNREGISTERED"),
+diff --git a/dev/src/dcache.v b/dev/src/dcache.v
+index 42ef401..3c58cd7 100644
+--- a/dev/src/dcache.v
++++ b/dev/src/dcache.v
+@@ -54,16 +54,20 @@ module dcache #(
+     localparam CNT_BITS = CLEAR_SRAM ? REGION - 4 : IDX_BITS;
+ 
+     // FSM states for cache ctl.
+-    localparam S_INIT  = 4'd0, S_IDLE  = 4'd1, S_CHECK = 4'd2, S_WBRD = 4'd3, S_WBREQ = 4'd4,
+-               S_FILL  = 4'd5, S_FILLWR = 4'd6, S_TAG  = 4'd7, S_DONE = 4'd8;
++    localparam S_INIT  = 4'd0, S_IDLE  = 4'd1, S_WBRD = 4'd3,
++               S_FILL  = 4'd5, S_DONE = 4'd8;
+     reg [3:0]          state;
+     // used during init phase to sweep cache and SRAM
+     reg [CNT_BITS-1:0] cnt;
+     reg [IDX_BITS-1:0] m_idx;
+     reg [TAG_BITS-1:0] m_tag, v_tag;
+-    reg                v_valid;
+-    reg [2:0]          wcnt;
+-    reg [127:0]        line_buf;
++    // write-back buffer: a dirty victim waits here while its replacement is fetched, then
++    // goes to SRAM in the background. A miss waits for it to drain, so it can't re-fetch
++    // the victim's line from SRAM before the victim gets there
++    reg [127:0]                 line_buf;
++    reg [TAG_BITS+IDX_BITS-1:0] wb_line;    // {tag, index} of the buffered victim
++    reg                         wb_pending;
++    wire                        wb_go = wb_pending && (state == S_IDLE || state == S_DONE);
+ 
+     wire [IDX_BITS-1:0] idx = addr[IDX_BITS+3:4];
+     wire [TAG_BITS-1:0] tag = addr[REGION-1:IDX_BITS+4];
+@@ -78,7 +82,7 @@ module dcache #(
+ 
+     assign ready   = (state != S_INIT);
+     assign busy    = !ready || (access && !hit);
+-    assign ev_miss = (state == S_IDLE) && access && !hit;
++    assign ev_miss = (state == S_IDLE) && access && !hit && !wb_pending;
+ 
+     // store alignment with byte enable
+     reg [31:0] st_wdata;
+@@ -105,8 +109,12 @@ module dcache #(
+     end
+     wire st_we = pipe_en && valid && mem_write && hit;
+ 
++    // the line arrives from sram_ctl on mack and goes straight into the data ram, its tag
++    // and valid bit with it, so a half-written line is never valid
++    wire fill_we = (state == S_FILL) && mack;
++
+     // tag and valid bit sdp ram
+-    wire tag_we = (state == S_INIT) || (state == S_TAG);
++    wire tag_we = (state == S_INIT) || fill_we;
+     sdp_ram #(.AW(IDX_BITS), .DW(TAG_BITS + 1)) u_tag (
+         .clk   (clk),
+         .we    (tag_we),
+@@ -117,26 +125,37 @@ module dcache #(
+         .rdata (tagv)
+     );
+ 
+-    // dirty bit sdp ram 
++    // dirty bit sdp ram, read a stage early like the tag, so a miss knows at once whether
++    // its victim is dirty. A store hit just ahead to the same line sets the bit on the same
++    // edge the read happens: dirty_byp catches that one
+     wire dirty_q;
++    reg  dirty_byp;
++    wire [IDX_BITS-1:0] ex_idx = ex_addr[IDX_BITS+3:4];
+     sdp_ram #(.AW(IDX_BITS), .DW(1)) u_dirty (
+         .clk   (clk),
+         .we    (st_we || tag_we),
+         .waddr (st_we ? idx : (state == S_INIT) ? cnt[IDX_BITS-1:0] : m_idx),
+         .wdata (st_we),
+-        .re    (1'b1),
+-        .raddr (idx),
++        .re    (pipe_en),
++        .raddr (ex_idx),
+         .rdata (dirty_q)
+     );
++    always @(posedge clk)
++        if (pipe_en) dirty_byp <= st_we && (idx == ex_idx);
+ 
+-    // data ram organized as 4 lanes of 8-bit tdp rams
+-    wire [31:0] word_r, word_b;
+-    wire        fill_we = (state == S_FILLWR);
+-    wire [31:0] fill_word = line_buf[32*wcnt[1:0] +: 32];
+-    genvar k;
++    // data ram organized as 4 lanes of 8-bit tdp rams. Port B is 32 bits wide, lane k's
++    // byte of each of the line's 4 words, so a whole line moves through it in one cycle
++    wire [31:0]  word_r;
++    wire [127:0] line_b;                 // the line port B read, in line order
++    genvar k, w;
+     generate
+         for (k = 0; k < 4; k = k + 1) begin : lane
+-            tdp_ram #(.AW(IDX_BITS + 2), .DW(8)) u_lane (
++            wire [31:0] wb_k, rb_k;
++            for (w = 0; w < 4; w = w + 1) begin : wd
++                assign wb_k[8*w +: 8]          = mrdata[32*w + 8*k +: 8];
++                assign line_b[32*w + 8*k +: 8] = rb_k[8*w +: 8];
++            end
++            tdp_ram #(.AW(IDX_BITS + 2), .DW(8), .RW(2)) u_lane (
+                 .clk     (clk),
+                 .en_a    (pipe_en),
+                 .we_a    (st_we && st_be[k]),
+@@ -144,9 +163,9 @@ module dcache #(
+                 .wdata_a (st_wdata[8*k +: 8]),
+                 .rdata_a (word_r[8*k +: 8]),
+                 .we_b    (fill_we),
+-                .addr_b  ({m_idx, wcnt[1:0]}),
+-                .wdata_b (fill_word[8*k +: 8]),
+-                .rdata_b (word_b[8*k +: 8])
++                .addr_b  ((state == S_IDLE) ? idx : m_idx),
++                .wdata_b (wb_k),
++                .rdata_b (rb_k)
+             );
+         end
+     endgenerate
+@@ -179,23 +198,26 @@ module dcache #(
+     end
+ 
+     // line bus 
+-    assign mreq   = (state == S_INIT && CLEAR_SRAM != 0) || (state == S_WBREQ) || (state == S_FILL);
++    assign mreq   = (state == S_INIT && CLEAR_SRAM != 0) || (state == S_FILL) || wb_go;
+     assign mwe    = (state != S_FILL);
+-    assign maddr  = (state == S_INIT)  ? {{(REGION-CNT_BITS){1'b0}}, cnt} << 4
+-                  : (state == S_WBREQ) ? {v_tag, m_idx, 4'b0}
+-                  :                      {m_tag, m_idx, 4'b0};
++    assign maddr  = (state == S_INIT) ? {{(REGION-CNT_BITS){1'b0}}, cnt} << 4
++                  : (state == S_FILL) ? {m_tag, m_idx, 4'b0}
++                  :                     {wb_line, 4'b0};
+     assign mwdata = (state == S_INIT) ? 128'd0 : line_buf;
+ 
+-    assign ev_writeback = (state == S_CHECK) && v_valid && dirty_q;
++    assign ev_writeback = ev_miss && tagv[TAG_BITS] && (dirty_q || dirty_byp);
+ 
+     // controller
+-    // miss -> (write the old line back if dirty) -> fetch the line -> write it in
+-    // -> new tag -> DONE holds `filled` until the pipeline moves the access on
++    // miss -> (park a dirty victim in the write-back buffer) -> fetch the line, written in
++    // with its tag on the ack -> DONE holds `filled` until the pipeline moves the access on;
++    // the buffer drains to SRAM in the background
+     always @(posedge clk) begin
+         if (rst) begin
+-            state <= S_INIT;
+-            cnt   <= {CNT_BITS{1'b0}};
++            state      <= S_INIT;
++            cnt        <= {CNT_BITS{1'b0}};
++            wb_pending <= 1'b0;
+         end else begin
++            if (wb_go && mack) wb_pending <= 1'b0;
+             case (state)
+                 // Sweep cache and SRAM (if clear) setting everything to 0 on reset, mark all lines
+                 // invalid and clear dirty bits, can only leave this state once cnt wraps 
+@@ -203,45 +225,25 @@ module dcache #(
+                               cnt <= cnt + 1'b1;
+                               if (&cnt) state <= S_IDLE;
+                           end
+-                // if we have a miss (access && !hit) check if victim line is dirty
+-                // at the same time raise the busy flag to freeze the pipeline
++                // on a miss (access && !hit) busy freezes the pipeline; a dirty victim is read
++                // out first, else fetch the new line
+                 S_IDLE:   if (ev_miss) begin
+-                              m_idx   <= idx;
+-                              m_tag   <= tag;
+-                              v_tag   <= tagv[TAG_BITS-1:0];
+-                              v_valid <= tagv[TAG_BITS];
+-                              state   <= S_CHECK;
+-                          end
+-                // check if the victim line is dirty, if so write it back, else fetch the new line
+-                S_CHECK:  begin 
+-                              wcnt  <= 3'd0;
++                              m_idx <= idx;
++                              m_tag <= tag;
++                              v_tag <= tagv[TAG_BITS-1:0];
+                               state <= ev_writeback ? S_WBRD : S_FILL;
+                           end
+-                // port B of data ram writes the victim line to the line buffer,
+-                // S_WBRD waits one cycle that it needs to access the data ram.
+-                // write one word per cycle for 4 cycles, then enter writeback request state
++                // port B read the victim line on the edge into S_WBRD (addressed by the missing
++                // access's index while IDLE): park it in the write-back buffer, fetch the new line
+                 S_WBRD:   begin
+-                              if (wcnt != 3'd0) line_buf[32*(wcnt-3'd1) +: 32] <= word_b;
+-                              wcnt <= wcnt + 3'd1;
+-                              if (wcnt == 3'd4) state <= S_WBREQ;
+-                          end
+-                // Entering S_WBREQ triggers mreq, mwe, maddr with line buffer data as mwdata
+-                // wait for the ack from the arbiter, then go to S_FILL to fetch the new line
+-                S_WBREQ:  if (mack) state <= S_FILL;
+-                // When we receive mem ack from sram ->arb->dcache, data comes directly from sram_ctl
+-                // read it into line_buffer, reset wcnt and go to S_FILLWR to write buffer to data ram
+-                S_FILL:   if (mack) begin
+-                              line_buf <= mrdata;
+-                              wcnt     <= 3'd0;
+-                              state    <= S_FILLWR;
+-                          end
+-                // write one word per cycle for 4 cycles, then enter S_TAG to write the new tag
+-                S_FILLWR: begin
+-                              wcnt <= wcnt + 3'd1;
+-                              if (wcnt == 3'd3) state <= S_TAG;
++                              line_buf   <= line_b;
++                              wb_line    <= {v_tag, m_idx};
++                              wb_pending <= 1'b1;
++                              state      <= S_FILL;
+                           end
+-                // write the new tag and valid bit, then enter S_DONE to hold the filled line
+-                S_TAG:    state <= S_DONE;
++                // When we receive mem ack from sram ->arb->dcache, the line on mrdata is written
++                // into the data ram with its tag (fill_we) on this edge
++                S_FILL:   if (mack) state <= S_DONE;
+                 // hold the filled line until the pipeline moves on, then go back to S_IDLE
+                 default:  if (pipe_en) state <= S_IDLE;   // S_DONE
+             endcase
+diff --git a/verif/tb/tb_pipeline.v b/verif/tb/tb_pipeline.v
+index bb7ab77..eb18966 100644
+--- a/verif/tb/tb_pipeline.v
++++ b/verif/tb/tb_pipeline.v
+@@ -75,7 +75,7 @@ module tb_pipeline;
+     localparam CODE_HW = 18'h00000;
+     localparam DATA_HW = 18'h20000;
+ 
+-    always #5 clk = ~clk;
++    always #10 clk = ~clk;   // the board's 50 MHz
+ 
+     reg [8*4-1:0] clken_mode, icache_mode;
+     integer       seed;
+@@ -176,6 +176,9 @@ module tb_pipeline;
+             clocks = clocks + 1;
+         end
+         #1;
++        // a dirty victim in the write-back buffer is in neither the cache nor SRAM yet
++        while (dut.u_dcache.wb_pending) @(posedge clk);
++        #1;
+ 
+         $fclose(tfd);
+         dfd = $fopen("dump.txt", "w");
+diff --git a/verif/tb/tb_bench.v b/verif/tb/tb_bench.v
+index a1dc83a..b71ed08 100644
+--- a/verif/tb/tb_bench.v
++++ b/verif/tb/tb_bench.v
+@@ -75,7 +75,7 @@ module tb_bench;
+         .SRAM_LB_N (SRAM_LB_N)
+     );
+ 
+-    always #5 clk = ~clk;
++    always #10 clk = ~clk;   // the board's 50 MHz
+ 
+     reg [8*4-1:0] clken_mode;
+     integer       seed;
+diff --git a/verif/tb/tb_dcache.v b/verif/tb/tb_dcache.v
+index a94c343..209cc12 100644
+--- a/verif/tb/tb_dcache.v
++++ b/verif/tb/tb_dcache.v
+@@ -15,7 +15,7 @@
+ //         sweep zeroes the whole region (smaller sizes so the sweep is short)
+ module tb_dcache;
+     reg clk = 0;
+-    always #5 clk = ~clk;
++    always #10 clk = ~clk;   // the board's 50 MHz
+ 
+     wire done_a, done_b;
+     wire [31:0] err_a, err_b;
+@@ -33,7 +33,7 @@ module tb_dcache;
+     end
+ 
+     initial begin
+-        #200_000_000;
++        #400_000_000;
+         $display("FAIL: timeout (a miss never completed?)");
+         $finish;
+     end
+@@ -209,6 +209,7 @@ module dcache_rig #(
+         wait (issued >= NOPS);
+         drained = advanced + 4;             // bubbles push the last access out of WB
+         wait (advanced >= drained);
++        wait (!dut.wb_pending);             // a buffered victim reaches SRAM in the background
+         @(negedge clk);
+         bad = 0;
+         for (i = 0; i < BYTES; i = i + 1) begin

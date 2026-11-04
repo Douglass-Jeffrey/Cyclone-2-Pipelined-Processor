@@ -1,0 +1,18 @@
+family,idx_bits,hist_bits,lhist_bits,state_bits,meta_w,fit,logic_elements,registers,setup_slack_ns,fmax_mhz,meets_50mhz,worst_path_to
+bimodal,8,0,0,512,32,True,7366,3232,0.949,52.49,True,id_ex_instr[17]
+bimodal,10,0,0,2048,32,True,10906,4768,1.095,52.9,True,two_bp[836][1]
+bimodal,11,0,0,4096,32,False,,,,,False,"Error (170012): Fitter requires 1225 LABs to implement the project, but the device contains only 1172 LABs"
+local,7,0,10,3328,32,True,13027,6058,-1.08,47.44,False,ram_block2a12~porta_address_reg1
+gshare,5,5,0,2053,32,True,11042,4782,0.824,52.15,True,two_bp_counter[1008][0]
+corr,5,5,0,2053,32,True,11073,4778,1.06,52.8,True,two_bp_counter[1][1][0]
+local,6,0,8,1024,32,True,8442,3752,0.411,51.05,True,two_bp_counter[111][1]
+gshare,5,3,0,515,32,True,7390,3240,1.413,53.8,True,ram_block2a27~porta_address_reg3
+corr,3,5,0,517,32,True,7401,3242,1.037,52.73,True,two_bp_counter[21][6][1]
+local,4,0,10,2208,32,True,11302,4938,0.638,51.65,True,ram_block2a6~porta_address_reg3
+gshare,2,9,0,4105,32,False,,,,,False,"Error (170012): Fitter requires 1227 LABs to implement the project, but the device contains only 1172 LABs"
+corr,1,10,0,4106,32,False,,,,,False,"Error (170012): Fitter requires 1225 LABs to implement the project, but the device contains only 1172 LABs"
+tournament,5,3,9,1891,32,True,10425,4627,0.478,51.22,True,id_ex_alu_op[1]
+tournament,4,3,8,931,32,True,8317,3666,0.731,51.9,True,ex_mem_wb_data[5]
+tournament,5,4,10,3460,32,True,13167,6199,0.449,51.15,True,id_ex_bp_meta[17]
+tournament,6,3,10,3843,32,True,13683,6580,-1.004,47.61,False,ram_block2a12~porta_address_reg2
+local,6,0,9,1600,32,True,9764,4329,0.36,50.92,True,two_bp_counter[155][0]

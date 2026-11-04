@@ -1,0 +1,1 @@
+["_start", "halt", "md5", "benchmark_body.constprop.0", "initialise_benchmark", "benchmark", "verify_benchmark", "init_heap_beebs", "malloc_beebs", "calloc_beebs", "free_beebs", "main", "memcpy", "memset", "__mulsi3", "__data_init"]

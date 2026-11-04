@@ -1,0 +1,7 @@
+design,build,logic_elements,memory_bits,setup_slack_ns,fmax_mhz
+original,"CPU (soc_top), m_all preloaded",6275,205824,1.197,53.2
+new SRAM controller,"CPU (soc_top), m_all preloaded",6313,205824,0.949,52.5
+combined (controller + c123),"CPU (soc_top), m_all preloaded",6176,205824,1.129,53.0
+original,SRAM test (sram_test),869,0,5.839,70.6
+WAIT_CYCLES=1,SRAM test (sram_test),843,0,5.763,70.2
+new SRAM controller,SRAM test (sram_test),880,0,5.471,68.8

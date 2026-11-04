@@ -1,0 +1,1 @@
+["_start", "halt", "benchmark_body.constprop.0", "benchmark", "initialise_benchmark", "verify_benchmark", "rand_beebs", "init_heap_beebs", "malloc_beebs", "free_beebs", "main", "memset", "__divsi3", "__hidden___udivsi3", "__udivsi3", "__umodsi3", "__modsi3", "__data_init"]

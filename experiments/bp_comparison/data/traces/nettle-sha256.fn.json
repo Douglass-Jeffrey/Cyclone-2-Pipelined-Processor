@@ -1,0 +1,1 @@
+["_start", "halt", "_nettle_write_be32", "_nettle_sha256_compress", "sha256_update", "sha256_write_digest", "benchmark_body.constprop.0.isra.0", "verify_benchmark", "initialise_benchmark", "benchmark", "main", "memcpy", "memset", "__data_init"]

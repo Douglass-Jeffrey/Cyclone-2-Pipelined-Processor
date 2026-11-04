@@ -1,0 +1,6 @@
+family,idx_bits,hist_bits,lhist_bits,state_bits,meta_w,fit,logic_elements,registers,setup_slack_ns,fmax_mhz,meets_50mhz,worst_path_to
+bimodal,5,0,0,64,32,True,6310,2784,0.877,52.29,True,ram_block2a4~porta_address_reg6
+corr,5,4,0,1028,32,True,8695,3752,0.748,51.94,True,two_bp_counter[0][31][0]
+gshare,5,4,0,1028,32,True,8506,3755,0.747,51.94,True,two_bp_counter[298][0]
+local,5,0,8,768,32,True,7789,3496,0.766,51.99,True,ram_block2a13~porta_address_reg0
+tournament,5,4,8,1860,32,True,10439,4597,0.46,51.18,True,ram_block2a4~porta_address_reg1
