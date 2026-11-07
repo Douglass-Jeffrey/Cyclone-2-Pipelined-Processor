@@ -1,0 +1,47 @@
+built bimodal:5:0:0            6370 LEs, setup slack 1.413 ns, timing met (58 s)
+ok    bimodal:5:0:0            coremark        full_compile flushes   65123 / sim   65123  cycles   949066  
+ok    bimodal:5:0:0            dhrystone       ram_swap     flushes    9037 / sim    9037  cycles   280725  
+ok    bimodal:5:0:0            huffbench       ram_swap     flushes    7306 / sim    7306  cycles   248253  
+ok    bimodal:5:0:0            sglib-combined  ram_swap     flushes    6450 / sim    6450  cycles   116545  
+ok    bimodal:5:0:0            slre            ram_swap     flushes    1249 / sim    1249  cycles    25839  
+ok    bimodal:5:0:0            median          ram_swap     flushes     549 / sim     549  cycles    14513  
+ok    bimodal:5:0:0            matmult-int     ram_swap     flushes   71407 / sim   71407  cycles   795194  
+ok    bimodal:5:0:0            crc32           ram_swap     flushes    1032 / sim    1032  cycles    37902  
+ok    bimodal:5:0:0            aha-mont64      ram_swap     flushes    1065 / sim    1065  cycles    29701  
+ok    bimodal:5:0:0            depthconv       ram_swap     flushes    1481 / sim    1481  cycles    36069  
+ok    bimodal:5:0:0            edn             ram_swap     flushes   41059 / sim   41059  cycles   896276  
+ok    bimodal:5:0:0            md5sum          ram_swap     flushes     234 / sim     234  cycles    51699  
+ok    bimodal:5:0:0            nettle-sha256   ram_swap     flushes      43 / sim      43  cycles    10256  
+ok    bimodal:5:0:0            statemate       ram_swap     flushes      43 / sim      43  cycles     1923  
+ok    bimodal:5:0:0            tarfind         ram_swap     flushes    8167 / sim    8167  cycles   150891  
+ok    bimodal:5:0:0            ud              ram_swap     flushes     418 / sim     418  cycles     5309  
+ok    bimodal:5:0:0            towers          ram_swap     flushes      83 / sim      83  cycles     4307  
+ok    bimodal:5:0:0            multiply        ram_swap     flushes     208 / sim     208  cycles    30285  
+ok    bimodal:5:0:0            vvadd           ram_swap     flushes       6 / sim       6  cycles    11738  
+built bimodal:5:0:0            6128 LEs, setup slack 1.255 ns, timing met (54 s)
+ok    bimodal:5:0:0            coremark        full_compile flushes   65123 / sim   65123  cycles   948082  
+ok    bimodal:5:0:0            dhrystone       ram_swap     flushes    9037 / sim    9037  cycles   280503  
+ok    bimodal:5:0:0            huffbench       ram_swap     flushes    7306 / sim    7306  cycles   244715  
+ok    bimodal:5:0:0            sglib-combined  ram_swap     flushes    6450 / sim    6450  cycles   114385  
+ok    bimodal:5:0:0            slre            ram_swap     flushes    1249 / sim    1249  cycles    25491  
+ok    bimodal:5:0:0            median          ram_swap     flushes     549 / sim     549  cycles    12707  
+ok    bimodal:5:0:0            matmult-int     ram_swap     flushes   71407 / sim   71407  cycles   790976  
+ok    bimodal:5:0:0            crc32           ram_swap     flushes    1032 / sim    1032  cycles    37494  
+ok    bimodal:5:0:0            aha-mont64      ram_swap     flushes    1065 / sim    1065  cycles    29599  
+ok    bimodal:5:0:0            depthconv       ram_swap     flushes    1481 / sim    1481  cycles    35751  
+ok    bimodal:5:0:0            edn             ram_swap     flushes   41059 / sim   41059  cycles   894662  
+ok    bimodal:5:0:0            md5sum          ram_swap     flushes     234 / sim     234  cycles    50445  
+ok    bimodal:5:0:0            nettle-sha256   ram_swap     flushes      43 / sim      43  cycles     9956  
+ok    bimodal:5:0:0            statemate       ram_swap     flushes      43 / sim      43  cycles     1791  
+ok    bimodal:5:0:0            tarfind         ram_swap     flushes    8167 / sim    8167  cycles   147483  
+ok    bimodal:5:0:0            ud              ram_swap     flushes     418 / sim     418  cycles     5087  
+ok    bimodal:5:0:0            towers          ram_swap     flushes      83 / sim      83  cycles     4193  
+ok    bimodal:5:0:0            multiply        ram_swap     flushes     208 / sim     208  cycles    29673  
+ok    bimodal:5:0:0            vvadd           ram_swap     flushes       6 / sim       6  cycles     9938  
+usage: board_check.py [-h] --snapshot SNAPSHOT --work WORK
+                      [--programs PROGRAMS] [--full] [--out OUT]
+                      cfgs [cfgs ...]
+board_check.py: error: the following arguments are required: cfgs
+built bimodal:5:0:0            6128 LEs, setup slack 1.255 ns, timing met (55 s)
+ok    bimodal:5:0:0            median          full_compile flushes     549 / sim     549  cycles    12707  
+ok    bimodal:5:0:0            vvadd           full_compile flushes       6 / sim       6  cycles     9938  

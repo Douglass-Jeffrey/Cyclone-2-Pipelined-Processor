@@ -1,0 +1,65 @@
+Info: *******************************************************************
+Info: Running Quartus II 64-Bit SignalTap II
+    Info: Version 13.0.1 Build 232 06/12/2013 Service Pack 1 SJ Web Edition
+    Info: Copyright (C) 1991-2013 Altera Corporation. All rights reserved.
+    Info: Your use of Altera Corporation's design tools, logic functions 
+    Info: and other software and tools, and its AMPP partner logic 
+    Info: functions, and any output files from any of the foregoing 
+    Info: (including device programming or simulation files), and any 
+    Info: associated documentation or information are expressly subject 
+    Info: to the terms and conditions of the Altera Program License 
+    Info: Subscription Agreement, Altera MegaCore Function License 
+    Info: Agreement, or other applicable license agreement, including, 
+    Info: without limitation, that your use is for the sole purpose of 
+    Info: programming logic devices manufactured by Altera and sold by 
+    Info: Altera or its authorized distributors.  Please refer to the 
+    Info: applicable agreement for further details.
+    Info: Processing started: Fri Nov 06 19:27:28 2026
+Info: Command: quartus_stp -t read_results.tcl
+hardware : USB-Blaster [USB-0]
+device   : @1: EP2C(15|20) (0x020B30DD)
+
+clock    : 50 MHz
+state    : HALTED (counters frozen, values below are final)
+
+cycles   : 26715
+retired  : 22978
+stalls   : 564   (load-use interlock)
+flushes  : 733   (branch mispredict / jalr)
+D-cache  : 58 misses, 0 dirty write-backs
+I-cache  : 0 misses
+CPI      : 1.1626
+runtime  : 0.534 ms at 50 MHz
+MIPS     : 43.01
+
+results  : x28 = 0   (0x00000000)
+           x29 = 0   (0x00000000)
+           x30 = 0   (0x00000000)
+           x31 = 0   (0x00000000)
+
+halt pc  : 0x00000020  instr 0x0000006F
+
+all readout words (word number = JTAG selector):
+  word  0  cycles                  26715  0x0000685B
+  word  1  retired                 22978  0x000059C2
+  word  2  stalls                    564  0x00000234
+  word  3  flushes                   733  0x000002DD
+  word  4  x28                         0  0x00000000
+  word  5  x29                         0  0x00000000
+  word  6  x30                         0  0x00000000
+  word  7  x31                         0  0x00000000
+  word  8  status             2768437279  0xA503001F
+  word  9  retiring pc                32  0x00000020
+  word 10  retiring instr            111  0x0000006F
+  word 11  pc in ID                   32  0x00000020
+  word 12  write-back data            36  0x00000024
+  word 13  D-cache misses             58  0x0000003A
+  word 14  D write-backs               0  0x00000000
+  word 15  I-cache misses              0  0x00000000
+  status bits: halted=1 speed=11 mem_ready=1 reg_write=1 retire_valid=0 stall=0 redirect=0
+Info (23030): Evaluation of Tcl script read_results.tcl was successful
+Info: Quartus II 64-Bit SignalTap II was successful. 0 errors, 0 warnings
+    Info: Peak virtual memory: 4331 megabytes
+    Info: Processing ended: Fri Nov 06 19:27:30 2026
+    Info: Elapsed time: 00:00:02
+    Info: Total CPU time (on all processors): 00:00:00

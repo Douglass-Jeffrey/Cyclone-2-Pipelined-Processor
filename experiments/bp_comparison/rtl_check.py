@@ -82,18 +82,12 @@ def trace_checks(snapshot):
     record(rows)
 
 
-def bench_one(args):
-    snapshot, (fam, i, h, l) = args
-    harness = setup(snapshot)
-    sys.path.insert(0, os.path.join(ROOT, "benchmarks"))
-    import build as bench
-    meta = P.meta_bits(fam, i, h, l)
-    meta_w = max(32, meta)
-    name = "%s_%d_%d_%d" % (fam, i, h, l)
-    dev = os.path.join(snapshot, "dev_" + name)
+def make_dev(src, dev, fam, i, h, l):
+    """Copy the design folder src to dev with this predictor's defines; returns BP_META_W."""
+    meta_w = max(32, P.meta_bits(fam, i, h, l))
     if os.path.isdir(dev):
         shutil.rmtree(dev)
-    shutil.copytree(os.path.join(snapshot, "dev"), dev)
+    shutil.copytree(src, dev)
     p = os.path.join(dev, "defines.vh")
     s = open(p).read()
     for k, v in (("BP_TYPE", "`" + TYPES[fam]), ("BP_IDX_BITS", i), ("BP_HIST_BITS", max(h, 2)),
@@ -101,6 +95,18 @@ def bench_one(args):
         s, n = re.subn(r"(`define\s+%s\s+)\S+" % k, r"\g<1>%s" % v, s)
         assert n == 1, k
     open(p, "w").write(s)
+    return meta_w
+
+
+def bench_one(args):
+    snapshot, (fam, i, h, l) = args
+    harness = setup(snapshot)
+    sys.path.insert(0, os.path.join(ROOT, "benchmarks"))
+    import build as bench
+    meta = P.meta_bits(fam, i, h, l)
+    name = "%s_%d_%d_%d" % (fam, i, h, l)
+    dev = os.path.join(snapshot, "dev_" + name)
+    meta_w = make_dev(os.path.join(snapshot, "dev"), dev, fam, i, h, l)
     dev = dev.replace("\\", "/")
     run_dir = os.path.join(snapshot, "bench_runs", name)
     if os.path.isdir(run_dir):

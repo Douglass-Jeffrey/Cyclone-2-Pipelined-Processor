@@ -1,0 +1,9 @@
+family,idx_bits,hist_bits,lhist_bits,meta_w,logic_elements,registers,setup_slack_ns,all_slack_met,compile_s,method
+bimodal,5,0,0,32,6264,2784,1.149,True,78,swap
+bimodal,5,0,0,32,6264,2784,1.149,True,57,full
+bimodal,5,0,0,32,6264,2784,1.149,True,79,swap
+corr,5,4,0,32,8562,3752,0.361,True,167,swap
+gshare,5,4,0,32,8653,3755,0.7,True,107,swap
+local,5,0,8,32,7828,3496,1.111,True,108,swap
+tournament,5,4,8,32,10436,4597,0.344,True,135,swap
+tournament,5,4,10,32,13167,6199,0.449,True,222,swap

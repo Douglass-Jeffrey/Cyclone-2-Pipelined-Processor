@@ -1,35 +1,58 @@
-"""Figures for README.md from measured data (RTL simulation and the board).
+#!/usr/bin/env python3
+"""The memory study's figures, from measured data (data/) and the cache model (model/data/).
 
-    python experiments/memory/figures.py    -> figures/<name>.{svg,png} and <name>_dark.{svg,png}
+    python experiments/memory/figures.py
 
-Same style and validated palette as model/figures.py (whose helpers this imports).
+Writes figures/plain*/ (measured: RTL simulation and the board) and model/figures/plain*/ (model),
+in matplotlib's default style (plain/) and dark_background (plain_dark/).
 """
 import csv
 import json
 import os
-import sys
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+from matplotlib.ticker import PercentFormatter  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "model"))
-import figures as F  # noqa: E402  (model/figures.py: THEMES, style, new, titles, legend, hbar, ...)
-from matplotlib.ticker import FuncFormatter  # noqa: E402
-
-F.OUT = os.path.join(HERE, "figures")
 SIM = os.path.join(HERE, "data", "sim")
+MODEL_DATA = os.path.join(HERE, "model", "data")
+STYLES = {"plain": "default", "plain_dark": "dark_background"}
+OUT_MEASURED = OUT_MODEL = None  # set per style in __main__
 
-
-def sim(tag, mode="warm"):
-    return json.load(open(os.path.join(SIM, "%s_%s.json" % (tag, mode))))
-
-
-# ---- figure 1: where the cycles of one clean D-cache miss go ----
-# cycles per FSM phase, from dcache.v / sram_ctl.v; each row's total is the measured cost
-# (dbusy / dmiss on the 19 benchmarks), which miss_phases() checks
+# cycles per FSM phase of one clean D-cache miss, from dcache.v / sram_ctl.v; each row's total is
+# the measured cost (dbusy / dmiss on the 19 benchmarks), which miss_phases() checks
 STEPS = [("Original (WAIT_CYCLES = 2)", "base", (2, 35, 5)),
          ("WAIT_CYCLES = 1", "wait1", (2, 27, 5)),
          ("1-cycle reads, 2-cycle writes", "rd1wf", (2, 11, 5)),
          ("+ line-wide M4K port, FSM trims", "comb12", (1, 11, 0))]
 PHASES = ["Miss detect, dirty check", "SRAM line transfer", "Write line into M4K + tag"]
+
+# model design points (model/data/*.csv keys)
+SPEEDS = [("today", "Today: 4 cycles a beat"), ("wait1", "WAIT_CYCLES = 1: 3 cycles a beat"),
+          ("burst", "Burst reads: 1 cycle a beat")]
+PATH = [
+    ("Today (42-cycle miss)", dict(line=16, wv=0, port=32, speed="today")),
+    ("WAIT_CYCLES = 1", dict(line=16, wv=0, port=32, speed="wait1")),
+    ("Burst reads, 1 cycle a beat", dict(line=16, wv=0, port=32, speed="burst")),
+    ("+ line-wide fill port", dict(line=16, wv=0, port="line", speed="burst")),
+    ("+ 32-byte lines", dict(line=32, wv=0, port="line", speed="burst")),
+    ("+ write-validate", dict(line=32, wv=1, port="line", speed="burst")),
+]
+POINTS = [("Today", dict(line=16, wv=0, port=32, speed="today")),
+          ("Burst reads only", dict(line=16, wv=0, port=32, speed="burst")),
+          ("Burst + wide port + 32 B lines + write-validate", dict(line=32, wv=1, port="line", speed="burst"))]
+COLD = [("Today", dict(iline=16, port=32, speed="today")),
+        ("Burst reads", dict(iline=16, port=32, speed="burst")),
+        ("Burst + wide port + 32 B lines", dict(iline=32, port="line", speed="burst")),
+        ("Burst + wide port + 64 B lines", dict(iline=64, port="line", speed="burst"))]
+
+
+# ---- data ---------------------------------------------------------------------
+def sim(tag, mode="warm"):
+    return json.load(open(os.path.join(SIM, "%s_%s.json" % (tag, mode))))
 
 
 def miss_phases():
@@ -40,107 +63,194 @@ def miss_phases():
         assert abs(cost - sum(ph)) < 0.05, (name, cost, ph)
 
 
-def fig_miss(t, mode):
-    fig, axs = F.new(t, 8.4, 3.9)
-    ax = axs[0]
-    fig.subplots_adjust(left=0.31, right=0.95, top=F.top(fig, 0.95), bottom=0.15)
-    F.style(ax, t, grid_axis="x")
-    n = len(STEPS)
-    ax.set_ylim(n - 0.5, -0.5)
+def rows(name):
+    return list(csv.DictReader(open(os.path.join(MODEL_DATA, name))))
+
+
+def one(rs, **kw):
+    m = [r for r in rs if all(r[k] == str(v) for k, v in kw.items())]
+    assert len(m) == 1, (kw, len(m))
+    return m[0]
+
+
+# ---- figures ------------------------------------------------------------------
+def save(fig, folder, name):
+    os.makedirs(folder, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(os.path.join(folder, name + ".svg"))
+    fig.savefig(os.path.join(folder, name + ".png"), dpi=150)
+    plt.close(fig)
+
+
+# measured
+def fig_miss():
+    names = [s for s, _, _ in STEPS]
+    fig, ax = plt.subplots(figsize=(9, 4))
+    left = np.zeros(len(names))
+    for k, phase in enumerate(PHASES):
+        vals = np.array([ph[k] for _, _, ph in STEPS])
+        ax.barh(names, vals, left=left, label=phase)
+        left += vals
+    for i, total in enumerate(left):
+        ax.text(total + 0.5, i, "%d" % total, va="center")
+    ax.invert_yaxis()
     ax.set_xlim(0, 50)
-    ax.set_yticks(range(n))
-    ax.set_yticklabels([s for s, _, _ in STEPS], fontsize=9.5, color=t["ink"])
-    gap = 0.12                                  # ~2 px surface gap between segments
-    for i, (_, _, ph) in enumerate(STEPS):
-        x = 0.0
-        segs = [(k, v) for k, v in enumerate(ph) if v]
-        for j, (k, v) in enumerate(segs):
-            last = j == len(segs) - 1
-            F.hbar(ax, i, x + (gap if j else 0), x + v, 18, t["s"][k], t, round_end=last)
-            x += v
-        ax.text(x + 0.6, i, "%d cycles" % x, va="center", ha="left", fontsize=9, color=t["ink2"])
-    ax.set_xlabel("CPU cycles the pipeline is frozen, per clean data-cache miss (measured in RTL)",
-                  fontsize=9, color=t["ink2"])
-    F.titles(fig, t, "A data-cache miss: 42 cycles down to 12",
-             "Each row keeps the changes above it.  The SRAM transfer was 83% of a miss; reads now stream one beat a cycle")
-    F.legend(fig, t, [(t["s"][k], p) for k, p in enumerate(PHASES)], marker=None)
-    F.save(fig, "fig_m1_miss_breakdown", mode)
+    ax.set_xlabel("CPU cycles per clean data-cache miss (RTL)")
+    ax.set_title("Data-cache miss cost")
+    ax.legend(loc="lower right")
+    save(fig, OUT_MEASURED, "fig_m1_miss_breakdown")
 
 
-# ---- figure 2: measured on the board ----
-def fig_board(t, mode):
+def fig_board():
     bw = list(csv.DictReader(open(os.path.join(HERE, "data", "board", "sram_test.csv"))))
     kern = [("Original", 1342041), ("New SRAM controller", 730433), ("+ cache-side changes", 520505)]
-    fig, axs = F.new(t, 9.0, 3.7, ncols=2)
-    fig.subplots_adjust(left=0.17, right=0.97, top=F.top(fig, 1.05), bottom=0.17, wspace=0.62)
-    labels = ["Original\n(WAIT_CYCLES = 2)", "WAIT_CYCLES = 1", "1-cycle reads,\n2-cycle writes"]
-    panels = [(axs[0], labels, [float(r["mb_per_s"]) for r in bw], 60, "%.1f MB/s",
-               "SRAM bandwidth (sram_test, 0 errors)", "MB/s moved through sram_ctl"),
-              (axs[1], [k for k, _ in kern], [v for _, v in kern], 1.55e6, None,
-               "Memory kernels (m_all), CPU cycles", "Cycles, all 16 board words = simulation")]
-    for ax, names, vals, xmax, fmt, title, xlabel in panels:
-        F.style(ax, t, grid_axis="x")
-        ax.set_ylim(len(vals) - 0.5, -0.5)
-        ax.set_xlim(0, xmax)
-        ax.set_yticks(range(len(vals)))
-        ax.set_yticklabels(names, fontsize=9, color=t["ink"])
-        for i, v in enumerate(vals):
-            F.hbar(ax, i, 0, v, 18, t["s"][0], t)
-            txt = fmt % v if fmt else ("{:,}".format(v) + ("" if i == 0 else "  (%+.0f%%)" % (100.0 * (v - vals[0]) / vals[0])))
-            ax.text(v + xmax * 0.015, i, txt, va="center", ha="left", fontsize=9, color=t["ink2"])
-        ax.set_title(title, loc="left", fontsize=10, color=t["ink"], pad=6)
-        ax.set_xlabel(xlabel, fontsize=8.5, color=t["ink2"])
-    axs[0].xaxis.set_major_formatter(FuncFormatter(lambda v, _: "%g" % v))
-    axs[1].xaxis.set_major_formatter(FuncFormatter(F.compact))
-    F.titles(fig, t, "Measured on the DE1 at 50 MHz",
-             "Left: the real SRAM chip, back-to-back line transfers.  Right: the CPU running stream, copy and pointer-chase kernels")
-    F.save(fig, "fig_m2_board", mode)
+    fig, axes = plt.subplots(1, 2, figsize=(11, 3.5))
+    names = ["Original (WAIT=2)", "WAIT_CYCLES=1", "1-cycle reads,\n2-cycle writes"]
+    bars = axes[0].barh(names, [float(r["mb_per_s"]) for r in bw])
+    axes[0].bar_label(bars, fmt="%.1f", padding=3)
+    axes[0].set_xlim(0, 65)
+    axes[0].set_xlabel("MB/s")
+    axes[0].set_title("SRAM bandwidth (sram_test)")
+    bars = axes[1].barh([k for k, _ in kern], [v / 1e6 for _, v in kern])
+    axes[1].bar_label(bars, labels=["{:,}".format(v) for _, v in kern], padding=3)
+    axes[1].set_xlim(0, 1.7)
+    axes[1].set_xlabel("CPU cycles (millions)")
+    axes[1].set_title("Memory kernels (m_all)")
+    for a in axes:
+        a.invert_yaxis()
+    fig.suptitle("Measured on the DE1 at 50 MHz")
+    save(fig, OUT_MEASURED, "fig_m2_board")
 
 
-# ---- figure 3: per program, final design vs original ----
-def fig_programs(t, mode):
+def fig_programs():
     base = {m: sim("base", m) for m in ("warm", "cold")}
     new = {m: sim("comb123", m) for m in ("warm", "cold")}
     progs = [p for p in base["warm"] if p != "m_all"]
     red = {m: {p: 100.0 * (base[m][p]["cycles"] - new[m][p]["cycles"]) / base[m][p]["cycles"] for p in progs}
            for m in ("warm", "cold")}
     progs.sort(key=lambda p: (p.startswith("m_"), -red["warm"][p]))
-    fig, axs = F.new(t, 8.4, 7.4)
-    ax = axs[0]
-    fig.subplots_adjust(left=0.19, right=0.95, top=F.top(fig, 0.95), bottom=0.07)
-    F.style(ax, t, grid_axis="x")
-    n = len(progs)
-    ax.set_ylim(n - 0.5, -0.5)
-    ax.set_xlim(0, 75)
-    ax.set_yticks(range(n))
-    ax.set_yticklabels(progs, fontsize=9, color=t["ink"])
-    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: "%g%%" % v))
-    for i, p in enumerate(progs):
-        for k, (m, off) in enumerate((("warm", -0.17), ("cold", 0.17))):
-            F.hbar(ax, i + off, 0, red[m][p], 7, t["s"][k], t)
-        ax.text(max(red["warm"][p], red["cold"][p]) + 0.9, i, "%.0f%% / %.0f%%" % (red["warm"][p], red["cold"][p]),
-                va="center", ha="left", fontsize=8, color=t["ink2"])
-    ax.axhline(n - 3.5, color=t["axis"], lw=1 * F.PX)
-    ax.text(74, n - 3.62, "below: memory kernels", ha="right", va="bottom", fontsize=8.5, color=t["muted"])
-    sw = sum(base["warm"][p]["cycles"] for p in progs if not p.startswith("m_"))
-    sn = sum(new["warm"][p]["cycles"] for p in progs if not p.startswith("m_"))
-    cw = sum(base["cold"][p]["cycles"] for p in progs if not p.startswith("m_"))
-    cn = sum(new["cold"][p]["cycles"] for p in progs if not p.startswith("m_"))
-    ax.set_xlabel("Fewer CPU cycles than the original design (RTL simulation; labels: warm / cold)",
-                  fontsize=9, color=t["ink2"])
-    F.titles(fig, t, "Every program gets faster; the memory-bound ones most",
-             "Final design (all changes) vs original.  19 benchmarks in total: %.1f%% warm, %.1f%% cold"
-             % (100.0 * (sw - sn) / sw, 100.0 * (cw - cn) / cw))
-    F.legend(fig, t, [(t["s"][0], "Code preloaded (the board today)"), (t["s"][1], "Code fetched from SRAM (with a loader)")],
-             marker=None)
-    F.save(fig, "fig_m3_programs", mode)
+    y = np.arange(len(progs))
+    fig, ax = plt.subplots(figsize=(9, 7.5))
+    ax.barh(y - 0.2, [red["warm"][p] for p in progs], 0.4, label="Code preloaded (board today)")
+    ax.barh(y + 0.2, [red["cold"][p] for p in progs], 0.4, label="Code fetched from SRAM")
+    ax.set_yticks(y, progs)
+    ax.invert_yaxis()
+    ax.xaxis.set_major_formatter(PercentFormatter(decimals=0))
+    ax.set_xlabel("Cycle reduction vs. original design (RTL simulation)")
+    ax.set_title("Final design vs. original, per program")
+    ax.grid(True, axis="x")
+    ax.legend(loc="center right")
+    save(fig, OUT_MEASURED, "fig_m3_programs")
+
+
+# model
+def fig_speed():
+    S = rows("summary_dcache.csv")
+    lines = (16, 32, 64)
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharey=True)
+    for ax, port, title in zip(axes, ("32", "line"), ("32-bit fill port (today)", "Line-wide fill port")):
+        for sp, name in SPEEDS:
+            ys = [float(one(S, size=16384, line=l, ways=1, wv=0, port=port, speed=sp)["stall_pct"]) for l in lines]
+            ax.plot(lines, ys, "o-", label=name)
+        ax.set_xscale("log", base=2)
+        ax.set_xticks(lines, ["%d B" % l for l in lines])
+        ax.minorticks_off()
+        ax.yaxis.set_major_formatter(PercentFormatter(decimals=1))
+        ax.set_xlabel("Cache line size")
+        ax.set_title(title)
+        ax.grid(True)
+    axes[0].legend()
+    axes[0].set_ylabel("Memory stall, % of cycles")
+    fig.suptitle("SRAM controller speed vs. line size (16 KB D-cache, model)")
+    save(fig, OUT_MODEL, "fig1_controller_speed")
+
+
+def fig_assoc():
+    S, Pp = rows("summary_dcache.csv"), rows("per_program.csv")
+    lines = (16, 32, 64)
+    panels = [("19 benchmarks", None), ("m_stream", "m_stream"), ("m_copy", "m_copy"), ("m_chase", "m_chase")]
+    fig, axes = plt.subplots(1, 4, figsize=(14, 4))
+    for ax, (title, prog) in zip(axes, panels):
+        for w, fmt in ((1, "o-"), (2, "s--"), (4, "^:")):
+            kw = dict(size=16384, line=None, ways=w, wv=0, port=32, speed="today")
+            if prog is not None:
+                kw["program"] = prog
+            src = S if prog is None else Pp
+            ys = [int(one(src, **dict(kw, line=l))["miss"]) for l in lines]
+            ax.plot(lines, ys, fmt, label="direct mapped" if w == 1 else "%d-way LRU" % w)
+        ax.set_xscale("log", base=2)
+        ax.set_xticks(lines, [str(l) for l in lines])
+        ax.minorticks_off()
+        ax.set_ylim(bottom=0)
+        ax.set_xlabel("Line size (B)")
+        ax.set_title(title)
+        ax.grid(True)
+    axes[0].set_ylabel("Data-cache misses")
+    axes[0].legend()
+    fig.suptitle("Data-cache misses vs. associativity (16 KB, model)")
+    save(fig, OUT_MODEL, "fig2_associativity")
+
+
+def fig_path():
+    S = rows("summary_dcache.csv")
+    vals = [one(S, size=16384, ways=1, **kw) for _, kw in PATH]
+    fig, ax = plt.subplots(figsize=(9, 4))
+    bars = ax.barh([n for n, _ in PATH], [int(r["stall"]) for r in vals])
+    ax.bar_label(bars, labels=["{:,} ({:.2f}%)".format(int(r["stall"]), float(r["stall_pct"])) for r in vals],
+                 padding=3)
+    ax.invert_yaxis()
+    ax.set_xlim(0, 220000)
+    ax.set_xlabel("Data-cache stall cycles, 19 benchmarks (model)")
+    ax.set_title("Memory stall cycles, one change at a time")
+    save(fig, OUT_MODEL, "fig3_path")
+
+
+def fig_programs_model():
+    Pp = rows("per_program.csv")
+    pts = POINTS
+    progs = sorted({r["program"] for r in Pp}, key=lambda n: (
+        n.startswith("m_"), -float(one(Pp, program=n, size=16384, ways=1, **pts[0][1])["stall_pct"])))
+    y = np.arange(len(progs))
+    h = 0.8 / len(pts)
+    fig, ax = plt.subplots(figsize=(9, 8))
+    for k, (name, kw) in enumerate(pts):
+        xs = [float(one(Pp, program=n, size=16384, ways=1, **kw)["stall_pct"]) for n in progs]
+        ax.barh(y + (k - (len(pts) - 1) / 2) * h, xs, h, label=name)
+    ax.set_yticks(y, progs)
+    ax.invert_yaxis()
+    ax.xaxis.set_major_formatter(PercentFormatter(decimals=0))
+    ax.set_xlabel("Data-cache stall, % of the program's cycles (model)")
+    ax.set_title("Data-cache stall per program")
+    ax.grid(True, axis="x")
+    ax.legend(loc="center right")
+    save(fig, OUT_MODEL, "fig4_per_program")
+
+
+def fig_cold():
+    C = rows("summary_cold.csv")
+    vals = [one(C, isize=8192, iways=1, **kw) for _, kw in COLD]
+    names = [c for c, _ in COLD]
+    ip = [100 * float(r["istall"]) / float(r["cycles"]) for r in vals]
+    dp = [100 * float(r["dstall"]) / float(r["cycles"]) for r in vals]
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.barh(names, ip, label="I-cache stall")
+    bars = ax.barh(names, dp, left=ip, label="D-cache stall")
+    ax.bar_label(bars, labels=["%.1f%%" % (a + b) for a, b in zip(ip, dp)], padding=3)
+    ax.invert_yaxis()
+    ax.set_xlim(0, 11)
+    ax.xaxis.set_major_formatter(PercentFormatter(decimals=0))
+    ax.set_xlabel("Memory stall, % of cycles (19 benchmarks, code from SRAM, model)")
+    ax.set_title("Instruction vs. data cache stall with a loader")
+    ax.legend(loc="lower right")
+    save(fig, OUT_MODEL, "fig5_cold_start")
 
 
 if __name__ == "__main__":
     miss_phases()
-    F.plt.rcParams.update({"font.family": ["Segoe UI", "DejaVu Sans"], "svg.fonttype": "none",
-                           "axes.unicode_minus": False})
-    for mode, t in F.THEMES.items():
-        for f in (fig_miss, fig_board, fig_programs):
-            f(t, mode)
-    print("figures in", F.OUT)
+    for folder, style in STYLES.items():
+        OUT_MEASURED = os.path.join(HERE, "figures", folder)
+        OUT_MODEL = os.path.join(HERE, "model", "figures", folder)
+        with plt.style.context(style):
+            for f in (fig_miss, fig_board, fig_programs, fig_speed, fig_assoc, fig_path, fig_programs_model, fig_cold):
+                f()
+    print("figures in figures/plain*, model/figures/plain*")

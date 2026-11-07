@@ -75,15 +75,15 @@ def meta_bits(family, idx, hist, lhist):
 
 
 def rtl_buildable(family, idx, hist, lhist):
-    """Whether dev/src builds this config as is (history slices need >= 2 bits,
-    gshare's zero-bit pad needs IDX_BITS >= 1); BP_META_W may need raising."""
+    """Whether dev/src builds this config as is (history slices need >= 2 bits, and every
+    predictor's pc slice pc[IDX_BITS+1:2] needs IDX_BITS >= 1); BP_META_W may need raising."""
     if family.endswith("_variant"):
         return False
     if family in ("corr", "gshare", "tournament") and hist < 2:
         return False
     if family in ("local", "tournament") and lhist < 2:
         return False
-    if family in ("gshare", "tournament") and idx < 1:
+    if idx < 1:
         return False
     return True
 

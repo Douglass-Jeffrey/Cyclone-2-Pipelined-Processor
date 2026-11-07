@@ -1,0 +1,2 @@
+family,idx_bits,hist_bits,lhist_bits,meta_w,logic_elements,registers,setup_slack_ns,all_slack_met,compile_s,method
+bimodal,5,0,0,32,6370,2790,1.413,True,58,swap

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print the numbers the README's findings quote (after sweep.py and breakdown.py).
+"""Print the comparison's headline numbers (after sweep.py and breakdown.py).
 
     python experiments/bp_comparison/summary.py
 """
