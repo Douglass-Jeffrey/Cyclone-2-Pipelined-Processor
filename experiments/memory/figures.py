@@ -31,20 +31,20 @@ STEPS = [("Original (WAIT_CYCLES = 2)", "base", (2, 35, 5)),
 PHASES = ["Miss detect, dirty check", "SRAM line transfer", "Write line into M4K + tag"]
 
 # model design points (model/data/*.csv keys)
-SPEEDS = [("today", "Today: 4 cycles a beat"), ("wait1", "WAIT_CYCLES = 1: 3 cycles a beat"),
+SPEEDS = [("today", "Original: 4 cycles a beat"), ("wait1", "WAIT_CYCLES = 1: 3 cycles a beat"),
           ("burst", "Burst reads: 1 cycle a beat")]
 PATH = [
-    ("Today (42-cycle miss)", dict(line=16, wv=0, port=32, speed="today")),
+    ("Original (42-cycle miss)", dict(line=16, wv=0, port=32, speed="today")),
     ("WAIT_CYCLES = 1", dict(line=16, wv=0, port=32, speed="wait1")),
     ("Burst reads, 1 cycle a beat", dict(line=16, wv=0, port=32, speed="burst")),
     ("+ line-wide fill port", dict(line=16, wv=0, port="line", speed="burst")),
     ("+ 32-byte lines", dict(line=32, wv=0, port="line", speed="burst")),
     ("+ write-validate", dict(line=32, wv=1, port="line", speed="burst")),
 ]
-POINTS = [("Today", dict(line=16, wv=0, port=32, speed="today")),
+POINTS = [("Original", dict(line=16, wv=0, port=32, speed="today")),
           ("Burst reads only", dict(line=16, wv=0, port=32, speed="burst")),
           ("Burst + wide port + 32 B lines + write-validate", dict(line=32, wv=1, port="line", speed="burst"))]
-COLD = [("Today", dict(iline=16, port=32, speed="today")),
+COLD = [("Original", dict(iline=16, port=32, speed="today")),
         ("Burst reads", dict(iline=16, port=32, speed="burst")),
         ("Burst + wide port + 32 B lines", dict(iline=32, port="line", speed="burst")),
         ("Burst + wide port + 64 B lines", dict(iline=64, port="line", speed="burst"))]
@@ -96,7 +96,7 @@ def fig_miss():
     ax.invert_yaxis()
     ax.set_xlim(0, 50)
     ax.set_xlabel("CPU cycles per clean data-cache miss (RTL)")
-    ax.set_title("Data-cache miss cost")
+    ax.set_title("Cycles in one clean data-cache miss after each change")
     ax.legend(loc="lower right")
     save(fig, OUT_MEASURED, "fig_m1_miss_breakdown")
 
@@ -110,15 +110,15 @@ def fig_board():
     axes[0].bar_label(bars, fmt="%.1f", padding=3)
     axes[0].set_xlim(0, 65)
     axes[0].set_xlabel("MB/s")
-    axes[0].set_title("SRAM bandwidth (sram_test)")
+    axes[0].set_title("SRAM bandwidth in the memory test")
     bars = axes[1].barh([k for k, _ in kern], [v / 1e6 for _, v in kern])
     axes[1].bar_label(bars, labels=["{:,}".format(v) for _, v in kern], padding=3)
     axes[1].set_xlim(0, 1.7)
     axes[1].set_xlabel("CPU cycles (millions)")
-    axes[1].set_title("Memory kernels (m_all)")
+    axes[1].set_title("Cycles to run the three memory kernels")
     for a in axes:
         a.invert_yaxis()
-    fig.suptitle("Measured on the DE1 at 50 MHz")
+    fig.suptitle("Measured on the DE1 board at 50 MHz")
     save(fig, OUT_MEASURED, "fig_m2_board")
 
 
@@ -131,13 +131,13 @@ def fig_programs():
     progs.sort(key=lambda p: (p.startswith("m_"), -red["warm"][p]))
     y = np.arange(len(progs))
     fig, ax = plt.subplots(figsize=(9, 7.5))
-    ax.barh(y - 0.2, [red["warm"][p] for p in progs], 0.4, label="Code preloaded (board today)")
+    ax.barh(y - 0.2, [red["warm"][p] for p in progs], 0.4, label="Code preloaded (as on the board)")
     ax.barh(y + 0.2, [red["cold"][p] for p in progs], 0.4, label="Code fetched from SRAM")
     ax.set_yticks(y, progs)
     ax.invert_yaxis()
     ax.xaxis.set_major_formatter(PercentFormatter(decimals=0))
     ax.set_xlabel("Cycle reduction vs. original design (RTL simulation)")
-    ax.set_title("Final design vs. original, per program")
+    ax.set_title("Cycles saved per program by the memory changes")
     ax.grid(True, axis="x")
     ax.legend(loc="center right")
     save(fig, OUT_MEASURED, "fig_m3_programs")
@@ -148,7 +148,7 @@ def fig_speed():
     S = rows("summary_dcache.csv")
     lines = (16, 32, 64)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharey=True)
-    for ax, port, title in zip(axes, ("32", "line"), ("32-bit fill port (today)", "Line-wide fill port")):
+    for ax, port, title in zip(axes, ("32", "line"), ("32-bit fill port (original)", "Line-wide fill port")):
         for sp, name in SPEEDS:
             ys = [float(one(S, size=16384, line=l, ways=1, wv=0, port=port, speed=sp)["stall_pct"]) for l in lines]
             ax.plot(lines, ys, "o-", label=name)
@@ -161,7 +161,7 @@ def fig_speed():
         ax.grid(True)
     axes[0].legend()
     axes[0].set_ylabel("Memory stall, % of cycles")
-    fig.suptitle("SRAM controller speed vs. line size (16 KB D-cache, model)")
+    fig.suptitle("Memory stall by line size and SRAM controller speed (16 KB data cache, model)")
     save(fig, OUT_MODEL, "fig1_controller_speed")
 
 
@@ -187,7 +187,7 @@ def fig_assoc():
         ax.grid(True)
     axes[0].set_ylabel("Data-cache misses")
     axes[0].legend()
-    fig.suptitle("Data-cache misses vs. associativity (16 KB, model)")
+    fig.suptitle("Data-cache misses by associativity and line size (16 KB cache, model)")
     save(fig, OUT_MODEL, "fig2_associativity")
 
 
@@ -201,7 +201,7 @@ def fig_path():
     ax.invert_yaxis()
     ax.set_xlim(0, 220000)
     ax.set_xlabel("Data-cache stall cycles, 19 benchmarks (model)")
-    ax.set_title("Memory stall cycles, one change at a time")
+    ax.set_title("Data-cache stall cycles after each change (model)")
     save(fig, OUT_MODEL, "fig3_path")
 
 
@@ -220,7 +220,7 @@ def fig_programs_model():
     ax.invert_yaxis()
     ax.xaxis.set_major_formatter(PercentFormatter(decimals=0))
     ax.set_xlabel("Data-cache stall, % of the program's cycles (model)")
-    ax.set_title("Data-cache stall per program")
+    ax.set_title("Data-cache stall per program (model)")
     ax.grid(True, axis="x")
     ax.legend(loc="center right")
     save(fig, OUT_MODEL, "fig4_per_program")
@@ -240,7 +240,7 @@ def fig_cold():
     ax.set_xlim(0, 11)
     ax.xaxis.set_major_formatter(PercentFormatter(decimals=0))
     ax.set_xlabel("Memory stall, % of cycles (19 benchmarks, code from SRAM, model)")
-    ax.set_title("Instruction vs. data cache stall with a loader")
+    ax.set_title("Memory stall with code fetched from SRAM (model)")
     ax.legend(loc="lower right")
     save(fig, OUT_MODEL, "fig5_cold_start")
 

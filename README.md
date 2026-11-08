@@ -10,10 +10,10 @@ Python reference model by directed, random and unit testbenches.
 |---|---|
 | ISA | RV32I (no CSRs, traps or interrupts) |
 | Pipeline | IF, ID, EX, MEM, WB, in order |
-| Clock | 50 MHz board oscillator; Fmax ~51–54 MHz depending on `BP_TYPE` and placement |
+| Clock | 50 MHz board oscillator; Fmax 50.8 MHz as configured (0.32 ns of slack), 51–54 MHz with the smaller predictors |
 | Caches | 8 KB icache + 16 KB dcache, direct mapped, 16 B lines, all 52 M4Ks |
 | Main mem | On-board IS61LV25616 SRAM, 256K x 16 (512 KB) |
-| Resources | ~6,300 / 18,752 LEs, 52 / 52 M4Ks |
+| Resources | 13,015 / 18,752 LEs, 52 / 52 M4Ks |
 | Tools | Icarus Verilog, xPack RISC-V GCC, Python 3, Quartus II 13.0sp1 |
 
 ---
@@ -74,7 +74,11 @@ load. Each forwarding source and every side effect is gated by the stage's
 Branch prediction takes place in ID, the actual branch resolves in EX.
 
 `BP_TYPE` in `dev/defines.vh` picks the predictor; all use 2-bit saturating
-counters that reset to `01` (weakly not taken), untagged:
+counters that reset to `01` (weakly not taken), untagged. The default is
+`BP_TOURNAMENT` at `BP_IDX_BITS` 5, `BP_HIST_BITS` 4 and `BP_LHIST_BITS` 10
+(3,460 bits of state), the largest tournament that meets 50 MHz;
+`experiments/bp_comparison/` compares all five at every size. At these
+settings:
 
 - `BP_BIMODAL`: 32 counters, indexed by `pc[6:2]`.
 - `BP_CORR`: 16 counters for each of the 32 `pc[6:2]` slots, picked by the last
@@ -86,17 +90,19 @@ counters that reset to `01` (weakly not taken), untagged:
   words apart can share a counter. The history is speculative: a branch
   shifts its prediction in as it enters EX, and a mispredict puts back the
   history its lookup saw plus the real outcome.
-- `BP_LOCAL`: each of the 32 `pc[6:2]` slots keeps its own last 8 outcomes
-  (`BP_LHIST_BITS`), which pick one of 256 counters shared by all slots. The
-  slot history shifts when the branch trains.
+- `BP_LOCAL`: each of the 32 `pc[6:2]` slots keeps its own last 10 outcomes
+  (`BP_LHIST_BITS`), which pick one of 1,024 counters shared by all slots. The
+  slot history shifts when the branch trains. (Local at 32 x 10 hasn't been
+  through Quartus; 16 x 10 and 64 x 9 met 50 MHz.)
 - `BP_TOURNAMENT`: local's and gshare's tables side by side, both trained on
   every branch, and a 2-bit chooser per slot (reset to weakly gshare) that
   steps toward whichever side was right when they disagree. The global
   history shifts the prediction actually followed.
 
-Flushes over the 19 programs in `benchmarks/` (3.35M instrs; jalr included):
-bimodal 214,960, corr 202,033, gshare 201,386, local 197,211, tournament
-193,589.
+Flushes over the 19 programs in `benchmarks/` (3.35M instrs; jalr included),
+at these settings: bimodal 214,960, corr 202,033, gshare 201,386, local
+182,280, tournament 180,387. On the board the 19 programs take 3,638,358
+cycles with the tournament, 34,573 (0.94%) fewer than with bimodal.
 
 For every one:
 
@@ -150,8 +156,9 @@ The on-board SRAM is main mem and the M4Ks are the caches.
  │ tag+valid 512x6   │               │ tag+valid 1024x5   │
  │ data 2048x32      │               │ dirty     1024x1   │
  │ refill controller │               │ 4 lanes 4096x8     │
- └────────┬──────────┘               │ controller         │
-          │ read lines               └────────┬───────────┘
+ └────────┬──────────┘               │ controller,        │
+          │ read lines               │ write-back buffer  │
+          │                          └────────┬───────────┘
           │                                   │ read/write lines
           └──────────► mem_arbiter ◄──────────┘   (dcache wins a tie)
                             │
@@ -210,7 +217,7 @@ dcache  (1024 lines)         17    14 13              4 3    2 1    0
 - **Miss:** handled like a load-use stall. IF/ID holds and EX gets a bubble,
   while the instrs already in EX, MEM and WB keep going. The controller
   invalidates the line, reads it from SRAM, writes the 4 words, then the tag,
-  and the held fetch hits. About 45 cycles.
+  and the held fetch hits. About 17 cycles.
 - **Warm boot (`WARM = 1`):** the data ram powers up holding `program.hex`
   (the first 8 KB of code) and every tag powers up valid. A program up to
   8 KB runs straight from the bitstream with no image in SRAM. A reset does
@@ -219,13 +226,13 @@ dcache  (1024 lines)         17    14 13              4 3    2 1    0
 ### 2.4 dcache
 
 16 KB, direct mapped, write-back, allocate on store miss (a store that misses
-fetches the line first, then writes it).
+fetches the line first, then writes it), with a one-line write-back buffer.
 
 | RAM | Shape | M4Ks | Port A (register <-> dcache) | Port B (dcache <-> sram) |
 |---|---|---|---|---|
 | tag and valid bit sdp ram | 1024 x 5 `{valid, tag}` | 2 | CPU read, EX ALU result `[13:4]` | controller write |
-| dirty bit sdp ram | 1024 x 1 | 1 | — | store hit sets, refill clears; controller reads |
-| data ram, 4 lanes of 8-bit tdp rams | 4 x (4096 x 8) | 32 (4096 x 1 each) | loads and stores, `ex_mem_alu_result[13:2]`, enable `pipe_en` | refill writes, write-back reads |
+| dirty bit sdp ram | 1024 x 1 | 1 | read a stage early with the tag; a store hit sets it | refill clears |
+| data ram, 4 lanes of mixed-width tdp rams | 4 x (4096 x 8 / 1024 x 32) | 32 (4096 x 1 each) | 8 bits wide: loads and stores, `ex_mem_alu_result[13:2]`, enable `pipe_en` | 32 bits wide (the lane's byte of all 4 words): a whole line in or out in one cycle |
 
 **Byte lanes.** Lane k holds byte k of every word. A load reads all 4 lanes
 and the WB alignment picks the byte or halfword. A store enables only the
@@ -248,22 +255,25 @@ freezes. The load or store stays in MEM until the line is in.
 | State | Job | Next |
 |---|---|---|
 | S_INIT | After reset: walk all 1024 lines, clear valid and dirty. With `CLEAR_SRAM = 1` (board), also zero the whole data mem in SRAM (~12 ms). | S_IDLE |
-| S_IDLE | Wait for a MEM access that misses | S_CHECK |
-| S_CHECK | The victim's dirty bit is read this cycle | dirty: S_WBRD, clean: S_FILL |
-| S_WBRD | Read the victim's 4 words through port B into the line buffer | S_WBREQ |
-| S_WBREQ | Write the victim line to SRAM | S_FILL on ack |
-| S_FILL | Read the missing line from SRAM into the line buffer | S_FILLWR on ack |
-| S_FILLWR | Write the 4 words into the lanes through port B | S_TAG |
-| S_TAG | Write `{valid = 1, tag}` and clear dirty. The tag goes last, so a half-written line is never valid. | S_DONE |
+| S_IDLE | Wait for a MEM access that misses. The victim's dirty bit is already known. | dirty: S_WBRD, clean: S_FILL |
+| S_WBRD | Port B read the victim's whole line on the way in: park it in the write-back buffer | S_FILL |
+| S_FILL | Read the missing line from SRAM. On the ack it goes straight into the lanes through port B, with `{valid = 1, tag}` and a cleared dirty bit on the same edge, so a half-written line is never valid. | S_DONE |
 | S_DONE | Force a hit so the frozen access completes | S_IDLE once the pipeline moves |
 
-The dirty bit is read after the miss, not a stage early like the tag, because
-a store hit just ahead could be setting that same bit on the same edge.
+**Dirty bit.** It's read a stage early, like the tag, so a miss knows at once
+whether its victim is dirty. A store hit just ahead to the same line sets the
+bit on the same edge that read happens, and `dirty_byp` catches that case.
+
+**Write-back buffer.** A dirty victim waits in the buffer while its
+replacement is fetched, then goes to SRAM in the background while the
+pipeline runs. Any later miss waits for the buffer to drain first, so it can
+never re-fetch the victim's line from SRAM before the victim gets there.
 
 **Implementation note.** Quartus 13 won't infer a true dual-port M4K with a
 clock enable, so `tdp_ram` in `cache_ram.v` instantiates `altsyncram` directly
-for synthesis, with port B on its own clock enable, and keeps a behavioural
-model for iverilog.
+for synthesis, with port B on its own clock enable and `RW` setting how many
+times wider and shallower port B is, and keeps a behavioural model for
+iverilog.
 
 ### 2.5 Memory arbiter
 
@@ -280,24 +290,32 @@ goes:
 ### 2.6 SRAM controller
 
 The SRAM is a 10 ns asynchronous part with a 16-bit data bus, so a 16-byte
-line is 8 beats. Each beat is SETUP (1 cycle), PULSE (`WAIT_CYCLES` = 2
-cycles) and HOLD (1 cycle):
+line is 8 beats.
 
-- **Reads:** OE_N stays low for the whole line and the data is sampled 3 cycles
-  after the address.
-- **Writes:** the address and data are stable a full cycle before WE_N falls and
-  a full cycle after it rises.
+- **Reads are pipelined** (`RD_CYCLES` = 1). An async SRAM has no read strobe:
+  with OE_N low its data simply follows the address. A new address goes out on
+  every edge, and on that same edge the I/O-cell input register samples the
+  data for the previous one. Quartus' pin timing leaves about 4.7 ns of the
+  20 ns period to spare (`RD_CYCLES = 2` doubles the budget if a board ever
+  needs it).
+- **Writes take two cycles** (`WR_FAST` = 1). The address and data change on a
+  rising edge, WE_N falls half a cycle later from a falling-edge register and
+  rises half a cycle before the next address: 10 ns setup, a 20 ns strobe and
+  10 ns hold, with nothing changing on the same edge as WE_N. `WR_FAST = 0`
+  brings back SETUP, `WAIT_CYCLES` of strobe and HOLD.
 - **Pins:** every pin comes straight from an I/O-cell register.
 - **Byte enables:** UB_N and LB_N are always low; byte steering is done in the
   dcache lanes.
 
-| | Per beat | Per line | Bandwidth |
-|---|---|---|---|
-| sram_ctl, 50 MHz, WAIT_CYCLES = 2 | 4 cycles (80 ns) | ~35 cycles (~0.7 µs) | ~23 MB/s |
-| What the chip itself can do | 10 ns | ~80 ns | ~200 MB/s |
+| | Per beat | Per line |
+|---|---|---|
+| Read | 1 cycle (20 ns) | 10 cycles |
+| Write | 2 cycles (40 ns) | 17 cycles |
+| What the chip itself can do | 10 ns | ~80 ns |
 
-The margin was chosen for first bring-up. `WAIT_CYCLES = 1` should still be
-inside the chip's spec but hasn't been tried on the board yet.
+On the board, `quartus/sram_test` moves 52.6 MB/s through it, with no errors
+in 3,291 full-memory rounds. `experiments/memory/` measured each step of the
+speedup; the original controller took 4 cycles a beat and 35 a line.
 
 ### 2.7 M4K budget
 
@@ -311,9 +329,9 @@ inside the chip's spec but hasn't been tried on the board yet.
 
 | Event | Cycles |
 |---|---|
-| dcache miss, clean victim | ~42 |
-| dcache miss, dirty victim (write-back, then fill) | ~85 |
-| icache miss | ~45 |
+| dcache miss, clean victim | 12 |
+| dcache miss, dirty victim (into the write-back buffer, then fill) | ~29 |
+| icache miss | ~17 |
 
 Misses are served at the full 50 MHz in every speed mode, so the same miss
 costs fewer CPU cycles at the 25 MHz setting.
@@ -391,7 +409,8 @@ RV32I reference model, and the runner compares:
 
 The SRAM model (`verif/tb/sram_model.v`) checks the chip's timing rules
 (address and data setup and hold around WE_N, access time, bus contention)
-on every simulation.
+on every simulation. The testbenches clock at the board's 20 ns, so the
+access-time check sees the same budget as the real chip.
 
 ### 4.2 Running the tests
 

@@ -15,7 +15,7 @@
 //         sweep zeroes the whole region (smaller sizes so the sweep is short)
 module tb_dcache;
     reg clk = 0;
-    always #5 clk = ~clk;
+    always #10 clk = ~clk;   // the board's 50 MHz
 
     wire done_a, done_b;
     wire [31:0] err_a, err_b;
@@ -33,7 +33,7 @@ module tb_dcache;
     end
 
     initial begin
-        #200_000_000;
+        #400_000_000;
         $display("FAIL: timeout (a miss never completed?)");
         $finish;
     end
@@ -209,6 +209,7 @@ module dcache_rig #(
         wait (issued >= NOPS);
         drained = advanced + 4;             // bubbles push the last access out of WB
         wait (advanced >= drained);
+        wait (!dut.wb_pending);             // a buffered victim reaches SRAM in the background
         @(negedge clk);
         bad = 0;
         for (i = 0; i < BYTES; i = i + 1) begin

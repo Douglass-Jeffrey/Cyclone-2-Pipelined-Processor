@@ -75,7 +75,7 @@ module tb_pipeline;
     localparam CODE_HW = 18'h00000;
     localparam DATA_HW = 18'h20000;
 
-    always #5 clk = ~clk;
+    always #10 clk = ~clk;   // the board's 50 MHz
 
     reg [8*4-1:0] clken_mode, icache_mode;
     integer       seed;
@@ -175,6 +175,9 @@ module tb_pipeline;
             @(posedge clk);
             clocks = clocks + 1;
         end
+        #1;
+        // a dirty victim in the write-back buffer is in neither the cache nor SRAM yet
+        while (dut.u_dcache.wb_pending) @(posedge clk);
         #1;
 
         $fclose(tfd);

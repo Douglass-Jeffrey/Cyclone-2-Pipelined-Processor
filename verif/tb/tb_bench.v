@@ -75,7 +75,7 @@ module tb_bench;
         .SRAM_LB_N (SRAM_LB_N)
     );
 
-    always #5 clk = ~clk;
+    always #10 clk = ~clk;   // the board's 50 MHz
 
     reg [8*4-1:0] clken_mode;
     integer       seed;

@@ -36,28 +36,32 @@ endmodule
 // Quartus 13 will not infer a true dual-port RAM with a clock enable, so
 // synthesis instantiates altsyncram (port B on clock1, so it gets its own
 // enable) and simulation uses the equivalent behavioural model.
+// Port B is 2^RW times as wide and as shallow as port A (altsyncram's mixed
+// width): its word i is port A's words i*2^RW.., the lowest in its LSBs.
 module tdp_ram #(
     parameter AW = 12,
-    parameter DW = 8
+    parameter DW = 8,
+    parameter RW = 0
 ) (
-    input  wire          clk,
-    input  wire          en_a,
-    input  wire          we_a,
-    input  wire [AW-1:0] addr_a,
-    input  wire [DW-1:0] wdata_a,
-    output wire [DW-1:0] rdata_a,
-    input  wire          we_b,
-    input  wire [AW-1:0] addr_b,
-    input  wire [DW-1:0] wdata_b,
-    output wire [DW-1:0] rdata_b
+    input  wire                clk,
+    input  wire                en_a,
+    input  wire                we_a,
+    input  wire [AW-1:0]       addr_a,
+    input  wire [DW-1:0]       wdata_a,
+    output wire [DW-1:0]       rdata_a,
+    input  wire                we_b,
+    input  wire [AW-RW-1:0]    addr_b,
+    input  wire [(DW<<RW)-1:0] wdata_b,
+    output wire [(DW<<RW)-1:0] rdata_b
 );
 `ifdef __ICARUS__
-    reg [DW-1:0] mem [0:(1<<AW)-1];
-    reg [DW-1:0] qa, qb;
+    reg [DW-1:0]       mem [0:(1<<AW)-1];
+    reg [DW-1:0]       qa;
+    reg [(DW<<RW)-1:0] qb;
     assign rdata_a = qa;
     assign rdata_b = qb;
 
-    integer i;
+    integer i, j;
     initial for (i = 0; i < (1<<AW); i = i + 1) mem[i] = {DW{1'b0}};
 
     always @(posedge clk) begin
@@ -73,10 +77,12 @@ module tdp_ram #(
 
     always @(posedge clk) begin
         if (we_b) begin
-            mem[addr_b] <= wdata_b;
-            qb          <= wdata_b;
+            for (j = 0; j < (1<<RW); j = j + 1)
+                mem[addr_b * (1<<RW) + j] <= wdata_b[DW*j +: DW];
+            qb <= wdata_b;
         end else begin
-            qb          <= mem[addr_b];
+            for (j = 0; j < (1<<RW); j = j + 1)
+                qb[DW*j +: DW] <= mem[addr_b * (1<<RW) + j];
         end
     end
 `else
@@ -88,9 +94,9 @@ module tdp_ram #(
         .width_a                            (DW),
         .widthad_a                          (AW),
         .numwords_a                         (1 << AW),
-        .width_b                            (DW),
-        .widthad_b                          (AW),
-        .numwords_b                         (1 << AW),
+        .width_b                            (DW << RW),
+        .widthad_b                          (AW - RW),
+        .numwords_b                         (1 << (AW - RW)),
         .width_byteena_a                    (1),
         .width_byteena_b                    (1),
         .outdata_reg_a                      ("UNREGISTERED"),

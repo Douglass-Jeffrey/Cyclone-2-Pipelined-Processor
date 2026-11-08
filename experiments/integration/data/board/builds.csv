@@ -1,0 +1,2 @@
+family,idx_bits,hist_bits,lhist_bits,meta_w,logic_elements,registers,setup_slack_ns,all_slack_met,compile_s,method
+tournament,5,4,10,32,13015,6213,0.32,True,197,swap

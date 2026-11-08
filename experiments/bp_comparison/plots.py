@@ -24,13 +24,16 @@ FIGS = os.path.join(HERE, "figures")
 FAM = ["bimodal", "corr", "gshare", "local", "tournament"]
 LABEL = {"bimodal": "Bimodal", "corr": "Correlating", "gshare": "Gshare", "local": "Local",
          "tournament": "Tournament"}
-WL = {"softmul": "RV32I as built (software multiply/divide)",
-      "hwmul": "Without libgcc multiply/divide (as with an M extension)"}
 COLOR = {f: "C%d" % k for k, f in enumerate(FAM)}
 STYLES = {"plain": "default", "plain_dark": "dark_background"}
 WORKLOADS = ("softmul", "hwmul")
 SUFFIX = {"softmul": "as_built", "hwmul": "hw_muldiv"}  # file-name suffix, as in the pareto names
 OUT = None  # set per style in main()
+
+
+def wl_title(text, wl):
+    """Only the workload without libgcc multiply/divide is named in a title; as built is the default."""
+    return text if wl == "softmul" else text + ", without libgcc multiply/divide"
 
 
 # ---- data ---------------------------------------------------------------------
@@ -104,15 +107,16 @@ def cfg_text(r):
 # ---- figures ------------------------------------------------------------------
 def save(fig, name):
     os.makedirs(OUT, exist_ok=True)
-    fig.tight_layout()
+    if fig.get_layout_engine() is None:   # grids of panels use constrained layout instead
+        fig.tight_layout()
     fig.savefig(os.path.join(OUT, name + ".svg"))
     fig.savefig(os.path.join(OUT, name + ".png"), dpi=150)
     plt.close(fig)
 
 
-def bits_axis(ax):
+def bits_axis(ax, lo=4, hi=16, step=2):
     ax.set_xscale("log", base=2)
-    ticks = [2 ** k for k in range(4, 17, 2)]
+    ticks = [2 ** k for k in range(lo, hi + 1, step)]
     ax.set_xticks(ticks, [("%dK" % (v // 1024)) if v >= 1024 else str(v) for v in ticks])
     ax.minorticks_off()
     ax.set_xlabel("Predictor state (bits)")
@@ -135,34 +139,65 @@ def fig_pareto(sweep, wl, key, name, limit_bits):
     ax.set_xlabel("Predictor state budget (bits)")
     ax.set_ylim(bottom=0)
     ax.set_ylabel("Best MPKI" + (" (mean over programs)" if key != "mpki" else ""))
-    ax.set_title("Best MPKI vs. predictor size: " + WL[wl], fontsize=11)
+    ax.set_title(wl_title("Lowest " + ("MPKI" if key == "mpki" else "mean per-program MPKI")
+                          + " within each state budget", wl), fontsize=11)
     ax.grid(True)
     ax.legend()
     save(fig, name)
 
 
-def fig_heat(sweep, fam, xname, yname, xkey, ykey, title, name):
-    """One heatmap file per workload."""
+def heat_cells(ax, xs, ys, grid, vmin=None, vmax=None, mark=None, fontsize=7):
+    """Draw grid {(x, y): mpki} on ax with each value printed in its cell; mark outlines one (x, y)."""
+    z = np.full((len(ys), len(xs)), np.nan)
+    for (x, y), v in grid.items():
+        z[ys.index(y), xs.index(x)] = v
+    im = ax.imshow(z, origin="lower", aspect="auto", vmin=vmin, vmax=vmax)
+    mid = ((np.nanmin(z) if vmin is None else vmin) + (np.nanmax(z) if vmax is None else vmax)) / 2
+    if mark:
+        ax.add_patch(matplotlib.patches.Rectangle((xs.index(mark[0]) - 0.5, ys.index(mark[1]) - 0.5), 1, 1,
+                                                  fill=False, ec="red", lw=2.5))
+    for yi in range(len(ys)):
+        for xi in range(len(xs)):
+            if not np.isnan(z[yi, xi]):
+                ax.text(xi, yi, "%.0f" % z[yi, xi], ha="center", va="center", fontsize=fontsize,
+                        color="white" if z[yi, xi] < mid else "black")
+    ax.set_xticks(range(len(xs)), [budget_text(x) for x in xs])
+    ax.set_yticks(range(len(ys)), [budget_text(y) for y in ys])
+    return im
+
+
+def fig_heat(sweep, fam, xname, yname, xkey, ykey, title, name, vmax=None):
+    """One heatmap file per workload; vmax saturates outliers so the useful range keeps its colours."""
     for wl in WORKLOADS:
         fig, ax = plt.subplots(figsize=(7, 5.5))
-        grid = {(xkey(r), ykey(r)): r["mpki"] for r in sweep if r["family"] == fam and r["workload"] == wl}
-        xs, ys = sorted({k[0] for k in grid}), sorted({k[1] for k in grid})
-        z = np.full((len(ys), len(xs)), np.nan)
-        for (x, y), v in grid.items():
-            z[ys.index(y), xs.index(x)] = v
-        im = ax.imshow(z, origin="lower", aspect="auto")
-        mid = (np.nanmin(z) + np.nanmax(z)) / 2
-        for yi in range(len(ys)):
-            for xi in range(len(xs)):
-                if not np.isnan(z[yi, xi]):
-                    ax.text(xi, yi, "%.0f" % z[yi, xi], ha="center", va="center", fontsize=7,
-                            color="white" if z[yi, xi] < mid else "black")
-        ax.set_xticks(range(len(xs)), [str(x) for x in xs])
-        ax.set_yticks(range(len(ys)), [str(y) for y in ys])
+        rows = [r for r in sweep if r["family"] == fam and r["workload"] == wl]
+        grid = {(xkey(r), ykey(r)): r["mpki"] for r in rows}
+        assert len(grid) == len(rows), "more than one config per cell"
+        im = heat_cells(ax, sorted({k[0] for k in grid}), sorted({k[1] for k in grid}), grid, vmax=vmax)
         ax.set_xlabel(xname)
         ax.set_ylabel(yname)
-        ax.set_title("%s\n%s" % (title, WL[wl]), fontsize=11)
-        fig.colorbar(im, ax=ax, label="MPKI")
+        ax.set_title(wl_title(title, wl), fontsize=11)
+        fig.colorbar(im, ax=ax, label="MPKI", extend="max" if vmax else "neither")
+        save(fig, "%s_%s" % (name, SUFFIX[wl]))
+
+
+def fig_tournament_grid(sweep, name, final=(5, 4, 10)):
+    """Tournament MPKI over local history length and number of histories, one panel per global history
+    length on a shared colour scale; final (idx, hist, lhist) is outlined, as in dev/defines.vh."""
+    for wl in WORKLOADS:
+        rows = [r for r in sweep if r["family"] == "tournament" and r["workload"] == wl]
+        xs, ys = sorted({r["lhist_bits"] for r in rows}), sorted({1 << r["idx_bits"] for r in rows})
+        gs = sorted({r["hist_bits"] for r in rows})
+        lo, hi = min(r["mpki"] for r in rows), max(r["mpki"] for r in rows)
+        fig, axes = plt.subplots(2, (len(gs) + 1) // 2, figsize=(16, 8.4), layout="constrained")
+        for ax, g in zip(axes.flat, gs):   # every panel keeps its own ticks and labels, to read on its own
+            grid = {(r["lhist_bits"], 1 << r["idx_bits"]): r["mpki"] for r in rows if r["hist_bits"] == g}
+            im = heat_cells(ax, xs, ys, grid, lo, hi, (final[2], 1 << final[0]) if g == final[1] else None, 6)
+            ax.set_title("%d-bit global history" % g, fontsize=12)
+            ax.set_xlabel("Local history length (bits)")
+            ax.set_ylabel("Number of local histories")
+        fig.colorbar(im, ax=axes, label="MPKI", shrink=0.8, pad=0.01)
+        fig.suptitle(wl_title("Tournament predictor MPKI at each global history length", wl), fontsize=14)
         save(fig, "%s_%s" % (name, SUFFIX[wl]))
 
 
@@ -183,7 +218,7 @@ def fig_per_program(sweep, per_prog, budget, name):
                label="%s (%s)" % (LABEL[f], cfg_text(picks[f])))
     ax.set_xticks(x, progs, rotation=45, ha="right")
     ax.set_ylabel("MPKI")
-    ax.set_title("MPKI per program, best config within %s bits (as built)" % budget_text(budget))
+    ax.set_title("MPKI per program, best configuration of each predictor within %s bits" % budget_text(budget))
     ax.grid(True, axis="y")
     ax.legend()
     save(fig, name)
@@ -209,7 +244,7 @@ def fig_index(sweep, wl, name):
         ax.plot([2 * (1 << n) for n in ns], [b[n]["mpki"] for n in ns], "o-", color=c, label=text)
     bits_axis(ax)
     ax.set_ylabel("MPKI")
-    ax.set_title("Index function\n" + WL[wl], fontsize=11)
+    ax.set_title(wl_title("Combining the PC with the global history", wl), fontsize=11)
     ax.grid(True)
     ax.legend()
     save(fig, name)
@@ -225,32 +260,43 @@ def fig_timing(sweep, wl, name):
     ax.axhline(0, color="gray")
     bits_axis(ax)
     ax.set_ylabel("MPKI saved by speculative history")
-    ax.set_title("History timing\n" + WL[wl], fontsize=11)
+    ax.set_title(wl_title("Speculative versus late global history update", wl), fontsize=11)
     ax.grid(True)
     ax.legend()
     save(fig, name)
 
 
-def fig_cost(q, name):
-    fig, axes = plt.subplots(2, 1, figsize=(8, 8), sharex=True)
+MARKER = {"bimodal": "o", "corr": "s", "gshare": "^", "local": "D", "tournament": "v"}
+
+
+def fig_cost(q, key, name):
+    """One Quartus result (logic_elements or fmax_mhz) per fitted build on a linear bits axis.
+    Hollow, distinct markers keep same-size builds apart; the band is the size that ran out of LABs."""
+    fig, ax = plt.subplots(figsize=(7, 4.5))
     for k, fam in enumerate(FAM):
-        rows = sorted([r for r in q if r["family"] == fam and r["fit"] == "True"], key=lambda r: r["state_bits"])
-        xs = [r["state_bits"] for r in rows]
-        axes[0].plot(xs, [r["logic_elements"] for r in rows], "o-", color="C%d" % k, label=LABEL[fam])
-        axes[1].plot(xs, [r["fmax_mhz"] for r in rows], "o", color="C%d" % k, label=LABEL[fam])
-    fails = [r for r in q if r["fit"] != "True"]
-    axes[0].plot([r["state_bits"] for r in fails], [18752] * len(fails), "x", ms=9, color=plt.rcParams["text.color"],
-                 label="Did not fit")
-    axes[0].axhline(18752, color="gray", ls="--", label="EP2C20 capacity")
-    axes[1].axhline(50, color="gray", ls="--", label="Board clock (50 MHz)")
-    axes[0].set_ylim(bottom=0)
-    axes[0].set_ylabel("Logic elements (whole SoC)")
-    axes[1].set_ylabel("Fmax (MHz)")
-    axes[0].set_title("FPGA cost of predictor state (Cyclone II)")
-    bits_axis(axes[1])
-    for a in axes:
-        a.grid(True)
-        a.legend()
+        rows = [r for r in q if r["family"] == fam and r["fit"] == "True"]
+        ax.plot([r["state_bits"] for r in rows], [r[key] for r in rows], MARKER[fam], ms=8, mfc="none", mew=1.6,
+                color="C%d" % k, label=LABEL[fam])
+    end = 5120
+    ax.axvspan(fpga_limit_bits(q), end, color="gray", alpha=0.25, lw=0)
+    ax.text((fpga_limit_bits(q) + end) / 2, 0.5, "Did not fit (out of LABs)", transform=ax.get_xaxis_transform(),
+            rotation=90, ha="center", va="center", fontsize=9)
+    if key == "logic_elements":
+        ax.set_ylim(5000, 15000)
+        ax.yaxis.set_major_formatter(matplotlib.ticker.StrMethodFormatter("{x:,.0f}"))
+        ax.set_ylabel("Logic elements (whole design)")
+        ax.set_title("Logic elements used by the whole design")
+        ax.legend(fontsize=9, loc="upper left")
+    else:
+        ax.axhline(50, color="gray", ls="--", label="Board clock (50 MHz)")
+        ax.set_ylim(47, 54.5)
+        ax.set_ylabel("Fmax (MHz)")
+        ax.set_title("Fmax of the whole design")
+        ax.legend(fontsize=9, loc="lower left")
+    ax.set_xlim(0, end)
+    ax.set_xticks(range(0, end + 1, 1024), ["0"] + ["%dK" % k for k in range(1, end // 1024 + 1)])
+    ax.set_xlabel("Predictor state (bits)")
+    ax.grid(True)
     save(fig, name)
 
 
@@ -261,8 +307,8 @@ def fig_breakdown(rows, name):
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.barh([LABEL[f] for f in fams], prog, label="Program code")
     ax.barh([LABEL[f] for f in fams], lib, left=prog, label="libgcc multiply/divide")
-    ax.set_xlabel("Mispredicts, all 19 programs (default sizes)")
-    ax.set_title("Where the mispredicts are")
+    ax.set_xlabel("Mispredictions over all 19 programs (original default sizes)")
+    ax.set_title("Mispredictions in program code and in libgcc multiply/divide")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2)
     save(fig, name)
 
@@ -282,21 +328,23 @@ def main():
             fig_pareto(sweep, "hwmul", "mpki", "pareto_hw_muldiv", limit)
             fig_pareto(sweep, "softmul", "mean_program_mpki", "pareto_as_built_program_mean", limit)
             fig_pareto(sweep, "hwmul", "mean_program_mpki", "pareto_hw_muldiv_program_mean", limit)
-            fig_heat(sweep, "gshare", "Index bits (2^n counters)", "Global history bits",
-                     lambda r: r["idx_bits"] + r["hist_bits"], lambda r: r["hist_bits"],
-                     "Gshare: table size vs. history length (MPKI)", "heatmap_gshare")
-            fig_heat(sweep, "corr", "Index bits (2^n counters)", "Global history bits",
-                     lambda r: r["idx_bits"] + r["hist_bits"], lambda r: r["hist_bits"],
-                     "Correlating: table size vs. history length (MPKI)", "heatmap_corr")
-            fig_heat(sweep, "local", "Local history length (bits)", "Slot-history count (log2)",
-                     lambda r: r["lhist_bits"], lambda r: r["idx_bits"],
-                     "Local: history length vs. number of histories (MPKI)", "heatmap_local")
+            fig_heat(sweep, "gshare", "Table size (counters)", "Global history length (bits)",
+                     lambda r: 1 << (r["idx_bits"] + r["hist_bits"]), lambda r: r["hist_bits"],
+                     "Gshare predictor MPKI", "heatmap_gshare", vmax=60)
+            fig_heat(sweep, "corr", "Table size (counters)", "Global history length (bits)",
+                     lambda r: 1 << (r["idx_bits"] + r["hist_bits"]), lambda r: r["hist_bits"],
+                     "Correlating predictor MPKI", "heatmap_corr", vmax=60)
+            fig_heat(sweep, "local", "Local history length (bits)", "Number of local histories",
+                     lambda r: r["lhist_bits"], lambda r: 1 << r["idx_bits"],
+                     "Local predictor MPKI", "heatmap_local")
+            fig_tournament_grid(sweep, "heatmap_tournament")
             fig_per_program(sweep, per_prog, 1024, "per_program_1kbit")
             fig_per_program(sweep, per_prog, 8192, "per_program_8kbit")
             for wl in WORKLOADS:
                 fig_index(sweep, wl, "variants_index_" + SUFFIX[wl])
                 fig_timing(sweep, wl, "variants_timing_" + SUFFIX[wl])
-            fig_cost(q, "cost_les_fmax")
+            fig_cost(q, "logic_elements", "cost_les")
+            fig_cost(q, "fmax_mhz", "cost_fmax")
             fig_breakdown(bd, "mispredict_breakdown")
     print("figures in", os.path.join(FIGS, "plain*"))
 

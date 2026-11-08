@@ -7,32 +7,19 @@ and checked on the DE1.
 
 The write-up is on the [project page](https://douglass-jeffrey.github.io/projects/pipelined-processor.html).
 
-The changes are kept as patches against `dev/` and `verif/`. They are not applied to the
-design on this branch.
+All five changes are now part of the design (`dev/src/sram_ctl.v`, `dcache.v` and
+`cache_ram.v`, with the testbenches at the board's 20 ns). The study measured them as
+patches against the original design, one per step. Those live in the `v2` branch:
+`git show v2:experiments/memory/patches/<name>.diff` (`sram_ctl`, `tb_20ns`, `c1`, `c2`,
+`c12`, `c123` and `combined`).
 
 ## Contents
 
 | Path | What it is |
 |---|---|
-| `patches/` | the changes, one patch per step, and `combined.diff` with all of them |
 | `harness/` | `tb_mem.v` (the board's counter testbench plus memory-stall accounting) and the scripts that run it on each design; `board_suite.py` compares the board with it |
-| `harness/tb20*/`, `harness/run20.py` | the patched testbenches, for running the test suite on a patch without applying it |
 | `model/` | a trace-driven cache model, checked against the RTL, with its sweep, data and kernels (`programs/m_*.S`) |
-| `data/sim/` | RTL simulation counters for every design and program, code preloaded (warm) and fetched from SRAM (cold) |
+| `data/sim/` | RTL simulation counters for every design the study measured and every program, code preloaded (warm) and fetched from SRAM (cold); `base` is the original design |
 | `data/board/` | board measurements: SRAM bandwidth, the memory kernels and all 19 benchmarks |
 | `data/quartus*` | logic elements, timing and SRAM pin timing per design |
 | `figures/plain*/`, `model/figures/plain*/` | the figures, light and dark |
-
-## The patches
-
-| Patch | Changes |
-|---|---|
-| `sram_ctl.diff` | pipelined reads and two-cycle writes in `dev/src/sram_ctl.v` |
-| `tb_20ns.diff` | testbenches clocked at the board's 20 ns; **needed** with `sram_ctl.diff` |
-| `c1.diff`, `c2.diff` | line-wide M4K port; fewer D-cache states (each on its own) |
-| `c12.diff` | both, with the line written as it arrives |
-| `c123.diff` | + write-back buffer, with testbenches that wait for it to drain |
-| `combined.diff` | everything: `sram_ctl` + `c123` + 20 ns testbenches |
-
-They apply to this branch with `git apply`. Adopting them means updating the main README's
-§2.4 (D-cache FSM), §2.6 (SRAM controller) and §2.8 (miss costs).
